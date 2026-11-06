@@ -3,18 +3,38 @@
   "version": "0.1.0",
   "description": "Diagnose why a CLI command is missing across shells, npm installs, and daemons.",
   "license": "Apache-2.0",
+  "author": "WJDdidi-1",
   "type": "module",
   "bin": {
-    "cli-path-doctor": "./bin/cli-path-doctor.mjs"
+    "cli-path-doctor": "bin/cli-path-doctor.mjs"
   },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node --test"
   },
   "engines": {
     "node": ">=18"
   },
+  "keywords": [
+    "cli",
+    "path",
+    "diagnostics",
+    "npm",
+    "shell",
+    "daemon",
+    "ci"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/WJDdidi-1/cli-path-doctor.git"
+  },
+  "homepage": "https://github.com/WJDdidi-1/cli-path-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/WJDdidi-1/cli-path-doctor/issues"
   }
 }
