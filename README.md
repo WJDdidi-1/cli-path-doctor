@@ -1,47 +1,225 @@
 # cli-path-doctor
 
+[![CI](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml)
+
 Diagnose why a CLI command is missing across shells, npm installs, and daemons.
+
+A bare `command not found` gives you no clue which layer broke. `cli-path-doctor`
+resolves the command in four PATH contexts, inspects npm's global and local bin
+links, and prints the layer that failed plus a copy-paste fix. It runs fully
+offline: no account, no network call.
 
 ## Who it is for
 
-Developers and CI/release engineers who install CLIs with npm, apt, or curl, then invoke them from an interactive shell, a daemon, or a CI job.
+Developers and CI/release engineers who install CLIs with npm, apt, or curl, then
+invoke them from an interactive shell, a daemon, or a CI job.
 
 ## The problem
 
-A documented command is absent, or resolves in one context but not another, because PATH, npm bin links, executable bits, and postinstall behavior differ between interactive shells, daemons, and CI. A bare 'command not found' gives no clue which layer broke.
-
-## Why not the obvious answer
-
-`which` and `command -v` only inspect the current process PATH and say nothing about login-shell startup, npm's bin field or link state, or the reduced PATH a daemon inherits. Reinstall instructions assume a clean environment and cannot distinguish a missing binary from a broken symlink or an unexported directory.
+A documented command is absent, or resolves in one context but not another,
+because PATH, npm bin links, executable bits, and postinstall behavior differ
+between interactive shells, daemons, and CI. `which` and `command -v` only
+inspect the current process PATH; they say nothing about login-shell startup,
+npm's `bin` field or link state, or the reduced PATH a daemon inherits.
 
 ## Install
 
+Requires Node.js 18 or newer. The package has no runtime dependencies.
+
 ```sh
+# From npm
 npm install -g cli-path-doctor
+
+# Straight from GitHub
+npm install -g github:WJDdidi-1/cli-path-doctor
+
+# From a local checkout
+git clone https://github.com/WJDdidi-1/cli-path-doctor.git
+cd cli-path-doctor
+npm install -g .
+```
+
+You can also run it without installing:
+
+```sh
+npx cli-path-doctor <command>
+```
+
+Verify that the bin link is on your PATH:
+
+```sh
+cli-path-doctor --version
+# 0.1.0
+
+# POSIX
+command -v cli-path-doctor
+
+# Windows (PowerShell or cmd)
+where.exe cli-path-doctor
+```
+
+If the install succeeded but the command still is not found, ask the doctor
+about itself from the checkout:
+
+```sh
+node ./bin/cli-path-doctor.mjs cli-path-doctor
 ```
 
 ## Use
 
 ```sh
+cli-path-doctor <command>            # one row per context
+cli-path-doctor <command> --json     # machine-readable output
+cli-path-doctor <command> --verbose  # add shell/PATH details to stdout
 cli-path-doctor --help
+cli-path-doctor --version
 ```
+
+| Context | What it represents |
+| --- | --- |
+| `current` | The PATH of the process running the doctor (your shell, CI job, or daemon). |
+| `login` | The PATH reported by a login shell (`$SHELL -l -c`), falling back to a non-login probe. |
+| `non-login` | The PATH reported by a non-login shell (`$SHELL -c`). |
+| `daemon-like` | A minimal system PATH of the kind launchd, systemd, or a CI runner starts with. |
+
+On Windows there is no portable login/non-login shell convention, so those rows
+use the process PATH unless you supply the overrides described below. Command
+lookup honors `PATHEXT`, and fixes are printed in PowerShell form.
+
+### A real session
+
+The following is a captured session. It puts a `demo-cli` executable in a
+directory that only the `login` context is told about, which reproduces a
+classic "works in my shell, not in the daemon" failure:
+
+```console
+$ mkdir -p /tmp/path-doctor-demo/bin
+$ printf '#!/bin/sh\nexit 0\n' > /tmp/path-doctor-demo/bin/demo-cli
+$ chmod +x /tmp/path-doctor-demo/bin/demo-cli
+
+$ CLI_PATH_DOCTOR_LOGIN_PATH=/tmp/path-doctor-demo/bin:/usr/bin:/bin \
+    CLI_PATH_DOCTOR_NON_LOGIN_PATH=/usr/bin:/bin \
+    CLI_PATH_DOCTOR_DAEMON_PATH=/usr/bin:/bin \
+    cli-path-doctor demo-cli
+current      MISS (not found on PATH)
+login        /tmp/path-doctor-demo/bin/demo-cli
+non-login    MISS (not found on PATH)
+daemon-like  MISS (not found on PATH; login shell adds /tmp/path-doctor-demo/bin, which this PATH lacks)
+first login-only PATH directory: /tmp/path-doctor-demo/bin
+fixes:
+  export PATH='/tmp/path-doctor-demo/bin':"$PATH"
+$ echo $?
+0
+```
+
+Reading the output:
+
+- stdout contains exactly one row per context. Each row is a resolved path or
+  `MISS` with the reason.
+- Human guidance (`first login-only PATH directory` and `fixes`) goes to
+  stderr, so `cli-path-doctor <command> | ...` stays one row per line.
+- The exit code is `0` because at least one checked context resolves the
+  command. If every row is `MISS`, the exit code is `1`.
+- The `daemon-like` row names the first directory that the login shell adds and
+  the daemon PATH lacks, which is the layer that broke.
+
+### A real npm session
+
+The doctor also reads npm metadata even when the link is not on PATH. Here a
+`node_modules/.bin` link points at a package target that was never installed:
+
+```console
+$ mkdir -p /tmp/path-doctor-npm-demo/node_modules/.bin
+$ cd /tmp/path-doctor-npm-demo
+$ ln -s ../demo-pkg/cli.js node_modules/.bin/demo-cli
+
+$ cli-path-doctor demo-cli
+current      MISS (not found on PATH; broken npm bin link /private/tmp/path-doctor-npm-demo/node_modules/.bin/demo-cli -> ../demo-pkg/cli.js)
+login        MISS (not found on PATH; broken npm bin link /private/tmp/path-doctor-npm-demo/node_modules/.bin/demo-cli -> ../demo-pkg/cli.js)
+non-login    MISS (not found on PATH; broken npm bin link /private/tmp/path-doctor-npm-demo/node_modules/.bin/demo-cli -> ../demo-pkg/cli.js)
+daemon-like  MISS (not found on PATH; broken npm bin link /private/tmp/path-doctor-npm-demo/node_modules/.bin/demo-cli -> ../demo-pkg/cli.js)
+fixes:
+  rm -f '/private/tmp/path-doctor-npm-demo/node_modules/.bin/demo-cli'
+  (cd '/private/tmp/path-doctor-npm-demo' && npm install)
+$ echo $?
+1
+```
+
+(`/tmp` resolves to `/private/tmp` on macOS, which is why the captured paths
+look longer than the setup commands.) The doctor found the npm layer even though
+the link was never on PATH, and it distinguished a broken link from a missing
+binary, a non-executable file, and a missing package `bin` target.
+
+### JSON output
+
+`--json` is intended for CI and for tooling. The top-level object contains:
+
+| Key | Meaning |
+| --- | --- |
+| `command`, `resolved`, `anyResolved`, `exitCode` | The command and overall outcome. |
+| `path` | The first resolved path, if any. |
+| `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `path`, `realPath`, `symlink`, `linkTarget`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
+| `shell` | The shell used for probing, or `null` on Windows. |
+| `loginOnlyDirectory` | The first login-only PATH directory, or `null`. |
+| `fixes` | Copy-paste fixes, as an array of strings. |
+| `npm` | `prefix`, `globalPrefix`, `preferred`, `candidates`, `local`, `global`, `packages`, `hint`, and `fixes`. |
+
+`npm.packages` includes package `bin` declarations even when the
+`node_modules/.bin` link was never created, and reports the target, link,
+symlink target, executable bit, and broken/missing state.
 
 ## What the MVP does
 
-- Run `cli-path-doctor <command>` to print one row per context (current, login, non-login, daemon-like) with the resolved path or a miss.
-- Inspect local npm metadata: global prefix, `node_modules/.bin`, package `bin` entries, symlink targets, and executable bits. It reads package `bin` declarations even when the `.bin` link was never created.
-- Name the first PATH directory present in a login shell but absent from the daemon/CI environment, when one exists.
-- Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or `chmod +x` as appropriate). Human guidance goes to stderr so stdout stays one row per context. Exit 0 if any checked context resolves the command, otherwise exit 1.
-- Support `--json` for CI and run fully offline with no account or network call. The JSON includes `loginOnlyDirectory`, top-level `fixes`, and an `npm` object with `prefix`, `globalPrefix`, `local`, `global`, `packages`, `hint`, and `fixes`.
+- Run `cli-path-doctor <command>` to print one row per context (current, login,
+  non-login, daemon-like) with the resolved path or a miss.
+- Inspect local npm metadata: global prefix, `node_modules/.bin`, package `bin`
+  entries, symlink targets, and executable bits. It reads package `bin`
+  declarations even when the `.bin` link was never created.
+- Name the first PATH directory present in a login shell but absent from the
+  daemon/CI environment, when one exists.
+- Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or
+  `chmod +x` as appropriate). Human guidance goes to stderr so stdout stays one
+  row per context.
+- Support `--json` and run fully offline with no account or network call.
 
-## How we know it works
+## Exit codes
 
-In a temp project, install a fixture package whose `bin` file is missing; `npx cli-path-doctor fixture-cmd` exits 1 and names the missing link; correct the bin and rerun to get exit 0; `cli-path-doctor sh` also exits 0. The test suite also covers a real `node_modules/.bin` symlink and its target, executable bits, a broken npm link, a missing package `bin` target, the npm global prefix under `NPM_CONFIG_PREFIX`, the first login-only PATH directory, copy-paste fixes, and offline `--json` output.
+| Code | Meaning |
+| --- | --- |
+| `0` | At least one checked context resolves the command (or help/version was printed). |
+| `1` | No checked context resolves the command. |
+| `2` | Usage error: missing command, too many arguments, or an unknown option. |
+
+## Environment overrides
+
+These are primarily for tests and deterministic CI output, but they are also
+handy for reproducing a daemon's environment from a normal shell:
+
+| Variable | Effect |
+| --- | --- |
+| `CLI_PATH_DOCTOR_SHELL` | Shell used for login/non-login probing (POSIX). |
+| `CLI_PATH_DOCTOR_LOGIN_PATH` | Use this PATH for the `login` row instead of probing. |
+| `CLI_PATH_DOCTOR_NON_LOGIN_PATH` | Use this PATH for the `non-login` row instead of probing. |
+| `CLI_PATH_DOCTOR_DAEMON_PATH` | Use this PATH for the `daemon-like` row instead of the built-in minimal PATH. |
+
+## Development
+
+```sh
+npm test
+```
+
+CI runs `npm test` on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22,
+and checks the publishable package contents with `npm pack --dry-run`. The tests
+cover real PATH resolution, a non-executable file fixed with `chmod`, a broken
+npm bin link, package `bin` entries whose link is missing, the npm global prefix
+under `NPM_CONFIG_PREFIX`, the first login-only PATH directory, copy-paste fixes,
+and offline `--json` output.
 
 ## Status
 
-Early MVP. The features above are the scope; anything not listed is not built yet.
+Early MVP. The features listed above are the scope; anything not listed is not
+built yet.
 
-## Licence
+## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE).
