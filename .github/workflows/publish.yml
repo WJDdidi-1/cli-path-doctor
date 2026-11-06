@@ -30,11 +30,14 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           declared="$(node -p "require('./package.json').version")"
           test "$tag" = "$declared" || { echo "tag ${GITHUB_REF_NAME} != package.json $declared"; exit 1; }
-      - run: npm ci
+      - name: install from the lockfile when there is one
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
       - run: npm test
       - name: no secrets or stray files in the tarball
         run: |
           set -euo pipefail
+          mkdir -p dist
           npm pack --pack-destination dist
           tar -tzf dist/*.tgz > files.txt
           ! grep -E '(^|/)(\.env|\.npmrc|id_rsa|credentials\.json|\.dsh)(/|$)' files.txt
