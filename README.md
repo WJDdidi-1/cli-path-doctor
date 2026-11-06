@@ -29,14 +29,14 @@ cli-path-doctor --help
 ## What the MVP does
 
 - Run `cli-path-doctor <command>` to print one row per context (current, login, non-login, daemon-like) with the resolved path or a miss.
-- Inspect local npm metadata: global prefix, `node_modules/.bin`, package `bin` entries, symlink targets, and executable bits.
+- Inspect local npm metadata: global prefix, `node_modules/.bin`, package `bin` entries, symlink targets, and executable bits. It reads package `bin` declarations even when the `.bin` link was never created.
 - Name the first PATH directory present in a login shell but absent from the daemon/CI environment, when one exists.
-- Print copy-paste fixes and exit 0 if any checked context resolves the command, otherwise exit 1.
-- Support `--json` for CI and run fully offline with no account or network call.
+- Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or `chmod +x` as appropriate). Human guidance goes to stderr so stdout stays one row per context. Exit 0 if any checked context resolves the command, otherwise exit 1.
+- Support `--json` for CI and run fully offline with no account or network call. The JSON includes `loginOnlyDirectory`, top-level `fixes`, and an `npm` object with `prefix`, `globalPrefix`, `local`, `global`, `packages`, `hint`, and `fixes`.
 
 ## How we know it works
 
-In a temp project, install a fixture package whose `bin` file is missing; `npx cli-path-doctor fixture-cmd` exits 1 and names the missing link; correct the bin and rerun to get exit 0; `cli-path-doctor sh` also exits 0.
+In a temp project, install a fixture package whose `bin` file is missing; `npx cli-path-doctor fixture-cmd` exits 1 and names the missing link; correct the bin and rerun to get exit 0; `cli-path-doctor sh` also exits 0. The test suite also covers a real `node_modules/.bin` symlink and its target, executable bits, a broken npm link, a missing package `bin` target, the npm global prefix under `NPM_CONFIG_PREFIX`, the first login-only PATH directory, copy-paste fixes, and offline `--json` output.
 
 ## Status
 

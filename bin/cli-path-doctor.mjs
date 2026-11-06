@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/contexts.mjs';
 import { describeMiss, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
+import { buildFixes } from '../lib/fixes.mjs';
 
 const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -23,8 +24,9 @@ Contexts (one row each):
   daemon-like  a minimal system PATH, similar to launchd, systemd, or CI
 
 The default output is one line per context: the command's resolved path, or
-MISS with the reason. Exit 0 if at least one context resolves <command>,
-otherwise exit 1.
+MISS with the reason. Copy-paste fixes and other human guidance go to stderr
+so stdout stays one row per context. Exit 0 if at least one context resolves
+<command>, otherwise exit 1.
 
 Options:
   --json       machine-readable output
@@ -39,7 +41,8 @@ MVP features:
     entries, symlink targets, and executable bits.
   - Name the first PATH directory present in a login shell but absent from the
     daemon-like environment, when one exists.
-  - Exit 0 if any checked context resolves the command, otherwise exit 1.
+  - Print copy-paste fixes and exit 0 if any checked context resolves the
+    command, otherwise exit 1.
   - Support --json and run fully offline with no account or network call.
 `;
 
@@ -93,11 +96,13 @@ function printUsage(stream) {
 function runCommand(command, options) {
   const contexts = buildContexts();
   const npmInspection = inspectNpmBins(command);
-  const hint = npmHint(npmInspection);
+  const hint = npmHint(npmInspection, {
+    pathValues: contexts.map((environment) => environment.pathValue),
+  });
 
   const loginContext = contexts.find((environment) => environment.name === 'login');
   const daemonContext = contexts.find((environment) => environment.name === 'daemon-like');
-  const loginOnlyDirectory = loginContext && daemonContext
+  const loginOnlyDirectory = loginContext && daemonContext && loginContext.reliable && daemonContext.reliable
     ? firstLoginOnlyDirectory(loginContext.pathValue, daemonContext.pathValue, process.platform)
     : null;
 
@@ -115,6 +120,7 @@ function runCommand(command, options) {
       pathValue: environment.pathValue,
       source: environment.source,
       note: environment.note,
+      reliable: environment.reliable,
       resolved: Boolean(result.resolved),
       path: result.resolved ? result.path : null,
       realPath: result.realPath || null,
@@ -124,8 +130,22 @@ function runCommand(command, options) {
     };
   });
 
+  if (loginOnlyDirectory) {
+    const daemonRow = rows.find((row) => row.name === 'daemon-like' && !row.resolved);
+    if (daemonRow) {
+      daemonRow.reason = `${daemonRow.reason}; login shell adds ${loginOnlyDirectory}, which this PATH lacks`;
+    }
+  }
+
   const anyResolved = rows.some((row) => row.resolved);
   const firstResolved = rows.find((row) => row.resolved) || null;
+  const fixes = buildFixes({
+    command,
+    rows,
+    loginOnlyDirectory,
+    npmInspection,
+    platform: process.platform,
+  });
 
   if (options.json) {
     const jsonRows = rows.map((row) => ({
@@ -142,6 +162,7 @@ function runCommand(command, options) {
       pathValue: row.pathValue,
       source: row.source,
       note: row.note,
+      reliable: row.reliable,
     }));
 
     const payload = {
@@ -154,12 +175,18 @@ function runCommand(command, options) {
       rows: jsonRows,
       shell: process.platform === 'win32' ? null : resolveShell(process.env, process.platform),
       loginOnlyDirectory,
+      fixes,
       npm: {
+        command: npmInspection.command,
+        prefix: npmInspection.prefix,
+        globalPrefix: npmInspection.globalPrefix,
         preferred: npmInspection.preferred,
         candidates: npmInspection.candidates,
         local: npmInspection.local,
         global: npmInspection.global,
+        packages: npmInspection.packages,
         hint,
+        fixes: npmInspection.fixes,
       },
     };
 
@@ -181,6 +208,20 @@ function runCommand(command, options) {
       if (loginOnlyDirectory) {
         process.stdout.write(`  first login-only PATH directory: ${loginOnlyDirectory}\n`);
       }
+      if (fixes.length > 0) {
+        process.stdout.write('  fixes:\n');
+        for (const fix of fixes) process.stdout.write(`    ${fix}\n`);
+      }
+    } else {
+      const guidance = [];
+      if (loginOnlyDirectory) {
+        guidance.push(`first login-only PATH directory: ${loginOnlyDirectory}`);
+      }
+      if (fixes.length > 0) {
+        guidance.push('fixes:');
+        for (const fix of fixes) guidance.push(`  ${fix}`);
+      }
+      if (guidance.length > 0) process.stderr.write(`${guidance.join('\n')}\n`);
     }
   }
 
