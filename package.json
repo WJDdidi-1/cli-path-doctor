@@ -1,0 +1,20 @@
+{
+  "name": "cli-path-doctor",
+  "version": "0.1.0",
+  "description": "Diagnose why a CLI command is missing across shells, npm installs, and daemons.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "cli-path-doctor": "./bin/cli-path-doctor.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WJDdidi-1/cli-path-doctor.git"
+  }
+}
