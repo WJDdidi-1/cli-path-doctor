@@ -8,7 +8,7 @@
     "cli-path-doctor": "./bin/cli-path-doctor.mjs"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
