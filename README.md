@@ -225,6 +225,75 @@ handy for reproducing a daemon's environment from a normal shell:
 | `CLI_PATH_DOCTOR_NON_LOGIN_PATH` | Use this PATH for the `non-login` row instead of probing. |
 | `CLI_PATH_DOCTOR_DAEMON_PATH` | Use this PATH for the `daemon-like` row instead of the built-in minimal PATH. |
 
+## FAQ
+
+### Why does the doctor say MISS when I can run the command in my terminal?
+
+The doctor resolves names through PATH. It does not use your shell's aliases or
+functions, and it deliberately never starts an interactive shell, so names that
+only exist after interactive startup files run can be missed. Ask your shell
+what the name actually is, then rerun the check:
+
+```sh
+type node
+cli-path-doctor node --verbose
+```
+
+`type` (POSIX) reports whether the name is an alias, a function, or a file on
+PATH. If it is an alias or function, add it to the environment the daemon or CI
+job uses, or invoke the real file by path.
+
+### Why do `login` and `non-login` show the same path as `current`?
+
+Either your login startup does not change PATH, or the shell probe failed and
+the row fell back to the current PATH. A fallback row is marked unreliable;
+`--verbose` prints each row's source and any failure note:
+
+```sh
+cli-path-doctor node --verbose
+```
+
+On Windows the `login` and `non-login` rows use the process PATH unless you set
+`CLI_PATH_DOCTOR_LOGIN_PATH` or `CLI_PATH_DOCTOR_NON_LOGIN_PATH`.
+
+### Does it change my PATH or edit my shell profile?
+
+No. It diagnoses and prints copy-paste fixes; it does not apply them. Human
+guidance and fixes go to stderr, so on POSIX you can see just the four rows:
+
+```sh
+cli-path-doctor node 2>/dev/null
+```
+
+### Is `daemon-like` my real daemon's PATH?
+
+No. It is a conservative built-in PATH
+(`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` on POSIX), not
+the PATH of launchd, systemd, or your CI runner. To check a real daemon's PATH,
+copy it from that environment and override the row. For example, if the daemon
+only sees `/usr/bin:/bin`:
+
+```sh
+CLI_PATH_DOCTOR_DAEMON_PATH="/usr/bin:/bin" cli-path-doctor node
+```
+
+On Windows the built-in value is derived from `SystemRoot`; the same override
+works there.
+
+### How do I use it in CI?
+
+Use `--json` for machine-readable output and the exit code for pass/fail. Swap
+`node` for the command your job needs:
+
+```sh
+cli-path-doctor node --json > path-doctor.json
+```
+
+Exit `0` means at least one checked context resolves the command, `1` means none
+does, and `2` is a usage error. The output includes each context's
+`searchPath`, the resolved path, and any fixes, so a failed job has a record of
+the environment it ran in.
+
 ## Development
 
 ```sh
