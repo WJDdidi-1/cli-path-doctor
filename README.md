@@ -123,6 +123,29 @@ Reading the output:
 - The `daemon-like` row names the first directory that the login shell adds and
   the daemon PATH lacks, which is the layer that broke.
 
+### Run the example yourself
+
+[`examples/path-gap.mjs`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/examples/path-gap.mjs)
+reproduces that session for real. It creates a temporary
+`demo-path-doctor-<pid>` executable, gives only the `login` context a PATH that
+contains it, runs the doctor, and checks the diagnosis:
+
+```sh
+# from a checkout
+node examples/path-gap.mjs
+
+# or through the package script
+npm run example
+```
+
+The script prints the doctor's actual output and exits `0` only when `current`
+and `non-login` miss, `login` resolves, the `daemon-like` row names the
+login-only directory, and stderr prints the matching PATH fix (`export PATH=`
+on POSIX, `$env:Path` on Windows). It is cross-platform, has no dependencies,
+makes no network call, and cleans up its temp directory. See
+[`examples/README.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/examples/README.md)
+for the captured output and the exact checks.
+
 ### A real npm session
 
 The doctor also reads npm metadata even when the link is not on PATH. Here a
