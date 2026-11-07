@@ -11,11 +11,13 @@
   "files": [
     "bin",
     "lib",
+    "examples",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "example": "node examples/path-gap.mjs"
   },
   "engines": {
     "node": ">=18"
