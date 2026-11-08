@@ -173,6 +173,141 @@ look longer than the setup commands.) The doctor found the npm layer even though
 the link was never on PATH, and it distinguished a broken link from a missing
 binary, a non-executable file, and a missing package `bin` target.
 
+### A real broken global install (measured)
+
+The session above is a local `.bin` link. The harder case is a *global* install:
+`npm install -g` exits `0`, the package is on disk, and the command still does
+not exist because the package's declared `bin` target was never shipped.
+
+The measurement below was taken on 2026-11-09 on macOS arm64 with Node 24.15.0
+and npm 11.12.1. Build a fixture whose `bin` points at a file that does not
+exist, and install it globally into an isolated prefix:
+
+```sh
+demo=/tmp/path-doctor-global-demo
+rm -rf "$demo"
+mkdir -p "$demo/fixture-package/bin" "$demo/prefix"
+
+cat > "$demo/fixture-package/package.json" <<'JSON'
+{
+  "name": "broken-global-cli-fixture",
+  "version": "0.0.1",
+  "bin": { "demo-cli": "bin/missing.js" }
+}
+JSON
+echo fixture > "$demo/fixture-package/bin/keep.txt"
+
+export NPM_CONFIG_PREFIX="$demo/prefix"
+export NPM_CONFIG_CACHE="$demo/.npm-cache"
+(cd "$demo/fixture-package" && npm pack --pack-destination "$demo" >/dev/null)
+npm install -g "$demo/broken-global-cli-fixture-0.0.1.tgz" --ignore-scripts
+```
+
+npm reports success and installs the package, but it creates no `demo-cli`
+link: the target does not exist, so `<prefix>/bin` is never created. Pin the
+shell contexts so PATH is not a second variable:
+
+```sh
+export CLI_PATH_DOCTOR_LOGIN_PATH=/usr/bin:/bin
+export CLI_PATH_DOCTOR_NON_LOGIN_PATH=/usr/bin:/bin
+export CLI_PATH_DOCTOR_DAEMON_PATH=/usr/bin:/bin
+```
+
+Before the fix, the published `cli-path-doctor@0.1.0` was installed outside the
+fixture prefix and run against this install:
+
+```sh
+NPM_CONFIG_PREFIX=/tmp/path-doctor-published npm install -g cli-path-doctor@0.1.0
+```
+
+```console
+$ /tmp/path-doctor-published/bin/cli-path-doctor demo-cli
+current      MISS (not found on PATH)
+login        MISS (not found on PATH)
+non-login    MISS (not found on PATH)
+daemon-like  MISS (not found on PATH)
+fixes:
+  npm install -g 'demo-cli'
+$ echo $?
+1
+```
+
+That is the gap 0.1.0 leaves: it never names `broken-global-cli-fixture` or the
+missing `bin/missing.js` target, and its fix treats the *command* `demo-cli` as
+the package to install.
+
+After the fix, the same fixture run through this checkout's code:
+
+```console
+$ node ./bin/cli-path-doctor.mjs demo-cli
+current      MISS (not found on PATH; globally installed package broken-global-cli-fixture declares bin demo-cli -> /tmp/path-doctor-global-demo/prefix/lib/node_modules/broken-global-cli-fixture/bin/missing.js but the target file is missing; npm bin link /tmp/path-doctor-global-demo/prefix/bin/demo-cli is missing)
+login        MISS (not found on PATH; globally installed package broken-global-cli-fixture declares bin demo-cli -> /tmp/path-doctor-global-demo/prefix/lib/node_modules/broken-global-cli-fixture/bin/missing.js but the target file is missing; npm bin link /tmp/path-doctor-global-demo/prefix/bin/demo-cli is missing)
+non-login    MISS (not found on PATH; globally installed package broken-global-cli-fixture declares bin demo-cli -> /tmp/path-doctor-global-demo/prefix/lib/node_modules/broken-global-cli-fixture/bin/missing.js but the target file is missing; npm bin link /tmp/path-doctor-global-demo/prefix/bin/demo-cli is missing)
+daemon-like  MISS (not found on PATH; globally installed package broken-global-cli-fixture declares bin demo-cli -> /tmp/path-doctor-global-demo/prefix/lib/node_modules/broken-global-cli-fixture/bin/missing.js but the target file is missing; npm bin link /tmp/path-doctor-global-demo/prefix/bin/demo-cli is missing)
+fixes:
+  npm install -g 'broken-global-cli-fixture'
+$ echo $?
+1
+```
+
+Every row now names the globally installed package, the `bin` declaration, the
+missing target, and the absent link, and the fix reinstalls the package that
+declares the command. The exit code is still `1`, because naming the broken
+layer does not pretend the command works.
+
+The other shape is a correct install whose prefix `bin` directory is not on
+PATH. A fixture that ships its target installs cleanly:
+
+```sh
+demo=/tmp/path-doctor-global-demo-ok
+rm -rf "$demo"
+mkdir -p "$demo/fixture-package/bin" "$demo/prefix"
+
+cat > "$demo/fixture-package/package.json" <<'JSON'
+{
+  "name": "unlisted-global-cli-fixture",
+  "version": "0.0.1",
+  "bin": { "demo-ok": "bin/demo-ok.js" }
+}
+JSON
+cat > "$demo/fixture-package/bin/demo-ok.js" <<'JS'
+#!/usr/bin/env node
+console.log('demo-ok');
+JS
+chmod +x "$demo/fixture-package/bin/demo-ok.js"
+
+export NPM_CONFIG_PREFIX="$demo/prefix"
+export NPM_CONFIG_CACHE="$demo/.npm-cache"
+(cd "$demo/fixture-package" && npm pack --pack-destination "$demo" >/dev/null)
+npm install -g "$demo/unlisted-global-cli-fixture-0.0.1.tgz" --ignore-scripts
+```
+
+`<prefix>/bin/demo-ok` then exists and points at the real target. Published
+0.1.0 already explains this case:
+
+```console
+$ NPM_CONFIG_PREFIX=/tmp/path-doctor-global-demo-ok/prefix \
+    /tmp/path-doctor-published/bin/cli-path-doctor demo-ok
+current      MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
+login        MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
+non-login    MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
+daemon-like  MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
+fixes:
+  export PATH='/tmp/path-doctor-global-demo-ok/prefix/bin':"$PATH"
+$ echo $?
+1
+```
+
+So the measured gap is specific: 0.1.0 handles a global `bin` link whose
+directory is missing from PATH, and does not handle a declared `bin` whose
+target file is missing. The fix for the missing-target case is commit `c9c9fbd`
+in this repository and is covered by `test/global-install.test.mjs`; it is not
+in the published 0.1.0 tarball. Until a release containing it ships, that
+diagnosis is available from a checkout or from GitHub
+(`npm install -g github:WJDdidi-1/cli-path-doctor`). The full raw captures, JSON
+excerpt, and exact setup are in
+[`docs/measured-global-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/measured-global-install.md).
+
 ### JSON output
 
 `--json` is intended for CI and for tooling. The top-level object contains:
@@ -195,9 +330,11 @@ symlink target, executable bit, and broken/missing state.
 
 - Run `cli-path-doctor <command>` to print one row per context (current, login,
   non-login, daemon-like) with the resolved path or a miss.
-- Inspect local npm metadata: global prefix, `node_modules/.bin`, package `bin`
-  entries, symlink targets, and executable bits. It reads package `bin`
-  declarations even when the `.bin` link was never created.
+- Inspect npm metadata for local and global installs: the global prefix,
+  `node_modules/.bin`, `<prefix>/bin`, package `bin` entries, symlink targets,
+  and executable bits. It reads package `bin` declarations even when the link
+  was never created, including a global package whose declared target is
+  missing.
 - Name the first PATH directory present in a login shell but absent from the
   daemon/CI environment, when one exists.
 - Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or
@@ -304,13 +441,22 @@ CI runs `npm test` on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22,
 and checks the publishable package contents with `npm pack --dry-run`. The tests
 cover real PATH resolution, a non-executable file fixed with `chmod`, a broken
 npm bin link, package `bin` entries whose link is missing, the npm global prefix
-under `NPM_CONFIG_PREFIX`, the first login-only PATH directory, copy-paste fixes,
-and offline `--json` output.
+under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
+declared `bin` target is missing, the first login-only PATH directory, copy-paste
+fixes, and offline `--json` output.
 
 ## Status
 
 Early MVP. The features listed above are the scope; anything not listed is not
 built yet.
+
+The measured broken-install diagnosis is in this repository at commit `c9c9fbd`
+and is covered by `npm test`, but it is not in the published
+`cli-path-doctor@0.1.0` tarball. Until a release containing that commit ships,
+install from GitHub (`npm install -g github:WJDdidi-1/cli-path-doctor`) to get
+the behavior documented above. See
+[`docs/measured-global-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/measured-global-install.md)
+for the before/after captures.
 
 ## License
 
