@@ -1,6 +1,7 @@
 # cli-path-doctor
 
 [![CI](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml)
+[![version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
 
 Diagnose why a CLI command is missing across shells, npm installs, and daemons.
 
@@ -13,6 +14,13 @@ offline: no account, no network call.
 
 Developers and CI/release engineers who install CLIs with npm, apt, or curl, then
 invoke them from an interactive shell, a daemon, or a CI job.
+
+## Releases
+
+This tree is version **0.2.0**. Release tags follow `v<version>`, so its tag is
+`v0.2.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+describes what shipped in each version. Version 0.2.0 ships the global
+broken-`bin`-target diagnosis measured below.
 
 ## The problem
 
@@ -49,7 +57,7 @@ Verify that the bin link is on your PATH:
 
 ```sh
 cli-path-doctor --version
-# 0.1.0
+# 0.2.0
 
 # POSIX
 command -v cli-path-doctor
@@ -300,12 +308,10 @@ $ echo $?
 
 So the measured gap is specific: 0.1.0 handles a global `bin` link whose
 directory is missing from PATH, and does not handle a declared `bin` whose
-target file is missing. The fix for the missing-target case is commit `c9c9fbd`
-in this repository and is covered by `test/global-install.test.mjs`; it is not
-in the published 0.1.0 tarball. Until a release containing it ships, that
-diagnosis is available from a checkout or from GitHub
-(`npm install -g github:WJDdidi-1/cli-path-doctor`). The full raw captures, JSON
-excerpt, and exact setup are in
+target file is missing. Version `0.2.0` ships the fix (commit `c9c9fbd`, covered
+by `test/global-install.test.mjs`), so installing `cli-path-doctor@0.2.0`
+produces the after behavior shown above. The full raw captures, JSON excerpt,
+and exact setup are in
 [`docs/measured-global-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/measured-global-install.md).
 
 ### JSON output
@@ -447,14 +453,12 @@ fixes, and offline `--json` output.
 
 ## Status
 
-Early MVP. The features listed above are the scope; anything not listed is not
-built yet.
+Early MVP, version 0.2.0. The features listed above are the scope; anything not
+listed is not built yet.
 
-The measured broken-install diagnosis is in this repository at commit `c9c9fbd`
-and is covered by `npm test`, but it is not in the published
-`cli-path-doctor@0.1.0` tarball. Until a release containing that commit ships,
-install from GitHub (`npm install -g github:WJDdidi-1/cli-path-doctor`) to get
-the behavior documented above. See
+The measured broken-install diagnosis ships in `cli-path-doctor@0.2.0`; the
+before capture above is from the published 0.1.0. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+records both releases. See
 [`docs/measured-global-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/measured-global-install.md)
 for the before/after captures.
 
