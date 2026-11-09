@@ -9,8 +9,9 @@ and daemons.
 A bare `command not found` gives you no clue which layer broke. `cli-path-doctor`
 resolves the command in four PATH contexts, inspects npm's global and local bin
 links, searches the user-level bin directories used by cargo, bun, volta, go and
-other toolchains, and prints the layer that failed plus a copy-paste fix. It runs
-fully offline: no account, no network call.
+other toolchains, and prints the layer that failed plus a copy-paste fix. When a
+second copy of the command is earlier on PATH, it names both copies and says
+which one wins. It runs fully offline: no account, no network call.
 
 ## Who it is for
 
@@ -29,6 +30,8 @@ names that directory instead of suggesting `npm install -g`. Version 0.3.0
 shipped shell-aware PATH fixes: every POSIX fix names the startup file to edit
 (`~/.zshrc`, `~/.bashrc`, ...), and `--json` exposes `shellName` and `rcFile`.
 Version 0.2.0 shipped the global broken-`bin`-target diagnosis measured below.
+The development tree on top of 0.4.0 adds shadowed-copy reporting and stops
+suggesting PATH entries that the current shell already searches.
 
 ## The problem
 
@@ -135,20 +138,63 @@ $ echo $?
 Reading the output:
 
 - stdout contains exactly one row per context. Each row is a resolved path or
-  `MISS` with the reason.
-- Human guidance (`first login-only PATH directory` and `fixes`) goes to
-  stderr, so `cli-path-doctor <command> | ...` stays one row per line.
-- A PATH fix is only offered for a directory that actually contains the
-  command. The login-only directory is explained, but it is not suggested just
-  because it differs between contexts. When the command is missing everywhere,
-  the doctor prints the `npm install -g` line only if neither npm metadata nor a
-  searched toolchain directory contains it.
+  `MISS` with the reason. When a context has more than one copy, the row names
+  the winning path first and lists every copy it shadows.
+- Human guidance (`first login-only PATH directory`, `shadowed copies`, and
+  `fixes`) goes to stderr, so `cli-path-doctor <command> | ...` stays one row
+  per line.
+- A PATH fix is only offered for a directory that actually contains the command
+  and is not already on the current PATH. The login-only directory is explained,
+  but it is not suggested just because it differs between contexts. When the
+  command is missing everywhere, the doctor prints the `npm install -g` line
+  only if neither npm metadata nor a searched toolchain directory contains it.
 - Each POSIX PATH fix names the shell startup file to edit, so the advice can be
   followed without guessing where PATH is set.
 - The exit code is `0` because at least one checked context resolves the
   command. If every row is `MISS`, the exit code is `1`.
 - The `daemon-like` row names the first directory that the login shell adds and
   the daemon PATH lacks, which is the layer that broke.
+
+### Two installs, one winner (shadowing)
+
+A Homebrew install plus an npm install is a normal way to end up with two copies
+of the same command. Whichever directory comes first on PATH runs, and the other
+copy is silently shadowed. The doctor reports both:
+
+```console
+$ mkdir -p /tmp/path-doctor-shadow-demo/a/bin /tmp/path-doctor-shadow-demo/b/bin
+$ printf '#!/bin/sh\necho 1.0\n' > /tmp/path-doctor-shadow-demo/a/bin/demo-cli
+$ printf '#!/bin/sh\necho 2.0\n' > /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+$ chmod +x /tmp/path-doctor-shadow-demo/a/bin/demo-cli /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+
+$ shadow_path=/tmp/path-doctor-shadow-demo/a/bin:/tmp/path-doctor-shadow-demo/b/bin:$PATH
+$ PATH="$shadow_path" \
+    CLI_PATH_DOCTOR_LOGIN_PATH="$shadow_path" \
+    CLI_PATH_DOCTOR_NON_LOGIN_PATH="$shadow_path" \
+    CLI_PATH_DOCTOR_DAEMON_PATH="$shadow_path" \
+    cli-path-doctor demo-cli
+current      /tmp/path-doctor-shadow-demo/a/bin/demo-cli (wins; shadows /tmp/path-doctor-shadow-demo/b/bin/demo-cli)
+login        /tmp/path-doctor-shadow-demo/a/bin/demo-cli (wins; shadows /tmp/path-doctor-shadow-demo/b/bin/demo-cli)
+non-login    /tmp/path-doctor-shadow-demo/a/bin/demo-cli (wins; shadows /tmp/path-doctor-shadow-demo/b/bin/demo-cli)
+daemon-like  /tmp/path-doctor-shadow-demo/a/bin/demo-cli (wins; shadows /tmp/path-doctor-shadow-demo/b/bin/demo-cli)
+shadowed copies:
+  current: /tmp/path-doctor-shadow-demo/a/bin/demo-cli wins; shadowed: /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+  login: /tmp/path-doctor-shadow-demo/a/bin/demo-cli wins; shadowed: /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+  non-login: /tmp/path-doctor-shadow-demo/a/bin/demo-cli wins; shadowed: /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+  daemon-like: /tmp/path-doctor-shadow-demo/a/bin/demo-cli wins; shadowed: /tmp/path-doctor-shadow-demo/b/bin/demo-cli
+```
+
+The winning directory is already on every listed PATH, so there is deliberately
+no `export PATH=...` fix: exporting it again would be noise. A repeated PATH
+entry is not reported as a second copy, and a non-executable file or broken
+symlink is not a runnable copy.
+
+With `--json`, every context carries `copies` (each entry has `path`,
+`directory`, `realPath`, `symlink`, `linkTarget`, `winner`, and `shadowed`) and
+`shadowedPaths`. The top-level object also has a unique `copies` list (the same
+copy seen in several contexts is one entry with `contexts`, `winnerIn`, and
+`shadowedIn`), a `copiesByContext` map, flat `shadowed`/`shadowedPaths`
+lists, and a `shadowing` summary with the winner and shadowed paths per context.
 
 ### Run the example yourself
 
@@ -409,7 +455,12 @@ and exact setup are in
 | --- | --- |
 | `command`, `resolved`, `anyResolved`, `exitCode` | The command and overall outcome. |
 | `path` | The first resolved path, if any. |
-| `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `path`, `realPath`, `symlink`, `linkTarget`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
+| `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `path`, `realPath`, `symlink`, `linkTarget`, `copies`, `shadowed`, `shadowedPaths`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
+| `copies` | Every distinct runnable copy found across the contexts, in first-seen PATH order. Each entry adds `context` (first context that saw it), `contexts`, `command`, `winnerIn`, and `shadowedIn`. |
+| `copiesByContext` | Each context's own resolution order, keyed by context name. |
+| `shadowed` | The subset of `copies` that a winner hides in at least one context. |
+| `shadowedPaths` | The paths from `shadowed`, as strings. |
+| `shadowing` | Per-context `{ context, winner, copies, shadowed }` entries, only for contexts with a shadowed copy. |
 | `shell` | The shell used for probing, or `null` on Windows. |
 | `shellName` | The detected shell's basename (`zsh`, `bash`, ...), or `null` if unknown. |
 | `rcFile` | The startup file a PATH fix tells you to edit (`~/.zshrc`, `~/.bashrc`, ...), or `null` on Windows. |
@@ -453,6 +504,9 @@ sentence embedded in a `MISS` row.
 
 - Run `cli-path-doctor <command>` to print one row per context (current, login,
   non-login, daemon-like) with the resolved path or a miss.
+- List every runnable copy of the command on each context's PATH, name the
+  winner, report the shadowed copies, and expose the same evidence through
+  `copies`/`shadowed`/`shadowing` in `--json`.
 - Inspect npm metadata for local and global installs: the global prefix,
   `node_modules/.bin`, `<prefix>/bin`, package `bin` entries, symlink targets,
   and executable bits. It reads package `bin` declarations even when the link
@@ -468,8 +522,9 @@ sentence embedded in a `MISS` row.
 - Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or
   `chmod +x` as appropriate). POSIX PATH fixes name the startup file for the
   detected shell (`~/.zshrc`, `~/.bashrc`, ...), and the install line is kept
-  only when no checked directory or toolchain contains the command. Human
-  guidance goes to stderr so stdout stays one row per context.
+  only when no checked directory or toolchain contains the command. A PATH fix
+  is never emitted for a directory that the current PATH already searches.
+  Human guidance goes to stderr so stdout stays one row per context.
 - Support `--json` and run fully offline with no account or network call.
 
 ## Exit codes
@@ -583,10 +638,11 @@ npm bin link, package `bin` entries whose link is missing, the npm global prefix
 under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
 declared `bin` target is missing, shell-aware PATH fixes for zsh and bash, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
-fixes, offline `--json` output, and user-level cargo, bun, volta, and go bin
-directories (including `CARGO_HOME`, a non-executable toolchain binary, a
-toolchain directory already on PATH, and npm metadata for the same command
-losing to the toolchain evidence).
+fixes, offline `--json` output, shadowed copies in text and `--json`, suppression
+of PATH fixes for directories already searched, and user-level cargo, bun,
+volta, and go bin directories (including `CARGO_HOME`, a non-executable
+toolchain binary, a toolchain directory already on PATH, and npm metadata for
+the same command losing to the toolchain evidence).
 
 To re-run the shell-aware verification against a real npm-prefix fixture:
 
