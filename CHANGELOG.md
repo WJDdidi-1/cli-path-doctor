@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Added
+
+- A command installed outside npm is now found in the user-level bin
+  directories used by cargo/rustup, bun, volta, go, deno, pnpm, yarn, asdf,
+  mise, pyenv, rbenv, and per-user installers such as pipx/uv. The doctor
+  reports the installed path, names the toolchain and directory, and offers a
+  PATH fix for that directory instead of an `npm install -g` line.
+- `--json` exposes the whole search under `toolchains` (also `toolchain`):
+  `directories`, `candidates` with `toolchain`/`directory`/`directorySource`,
+  `preferred`, and `hint`. A configured location (`CARGO_HOME`, `BUN_INSTALL`,
+  `VOLTA_HOME`, and others) is searched in addition to the toolchain default.
+- A documented probe (`docs/probes/toolchain-bins.sh`) verifies cargo, bun, and
+  volta binaries found off PATH, the PATH fix and rc file, and the npm fallback
+  for a genuinely absent command. The captured run is in
+  `docs/toolchain-search.md`.
+
 ## [0.3.0] - 2026-11-09
 
 ### Added
@@ -85,6 +103,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Exit codes `0` (at least one context resolves), `1` (no context resolves), and
   `2` (usage error).
 
+[0.4.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/WJDdidi-1/cli-path-doctor/releases/tag/v0.1.0
