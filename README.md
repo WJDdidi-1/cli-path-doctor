@@ -230,25 +230,40 @@ $ echo $?
 
 The rows name the installed binary, and the fix names the directory to add plus
 the startup file for the detected shell. There is no `npm install -g` line,
-because `rg` was not installed with npm. The search covers:
+because `rg` was not installed with npm. The search covers these directories,
+in this order. A configured location is searched before its default, and a
+directory is searched once even when several variables point at it:
 
-| Toolchain | Directories |
+| Toolchain | Directories searched |
 | --- | --- |
-| Rust / cargo | `$CARGO_HOME/bin`, then `~/.cargo/bin` |
-| Bun | `$BUN_INSTALL/bin`, then `~/.bun/bin` |
-| Volta | `$VOLTA_HOME/bin`, then `~/.volta/bin` (or `%LOCALAPPDATA%\Volta\bin` on Windows) |
-| Go | `$GOBIN`, each `$GOPATH/bin`, then `~/go/bin` |
-| Deno | `$DENO_INSTALL/bin`, then `~/.deno/bin` |
-| pnpm | `$PNPM_HOME`, `~/.local/share/pnpm`, `~/Library/pnpm`, and `%LOCALAPPDATA%/pnpm` on Windows |
+| Rust / cargo | `$CARGO_HOME/bin` (when set), then `~/.cargo/bin` |
+| Bun | `$BUN_INSTALL/bin` (when set), then `~/.bun/bin` |
+| Volta | `$VOLTA_HOME/bin` (when set), then `~/.volta/bin`; `%LOCALAPPDATA%\Volta\bin` on Windows |
+| Go | `$GOBIN` (when set), each `$GOPATH/bin` (when set), then `~/go/bin` |
+| Deno | `$DENO_INSTALL/bin` (when set), then `~/.deno/bin` |
+| pnpm | `$PNPM_HOME` (when set), then `~/.local/share/pnpm` and `~/Library/pnpm`; `%LOCALAPPDATA%\pnpm` on Windows |
 | Yarn classic | `~/.yarn/bin` |
-| Version managers | `~/.asdf/shims`, `~/.local/share/mise/shims`, `~/.pyenv/shims`, `~/.rbenv/shims` (and their configured data/root variables) |
+| asdf | `$ASDF_DATA_DIR/shims` (when set), then `~/.asdf/shims` |
+| mise | `$MISE_DATA_DIR/shims` (when set), then `~/.local/share/mise/shims` |
+| pyenv | `$PYENV_ROOT/shims` (when set), then `~/.pyenv/shims` |
+| rbenv | `$RBENV_ROOT/shims` (when set), then `~/.rbenv/shims` |
 | Per-user installers | `~/.local/bin` (pipx, uv, standalone tools) |
 
 A configured variable is searched in addition to the default directory, so
 setting `CARGO_HOME` or `BUN_INSTALL` does not hide a binary that still lives in
 the default location. A binary found in a non-executable state gets a
 `chmod +x` fix; a broken link is reported as broken and is not turned into PATH
-advice. `--json` exposes the whole search under `toolchains`.
+advice. A command that is absent from every directory in this table still gets
+the fallback `npm install -g '<command>'` line, because there is no toolchain
+evidence to name. `--json` exposes the whole search under `toolchains`.
+
+The exact list lives in
+[`lib/toolchain-metadata.mjs`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/lib/toolchain-metadata.mjs).
+[`test/toolchain-bins.test.mjs`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/test/toolchain-bins.test.mjs)
+asserts every default and configured directory, a cargo/bun/volta binary found
+off PATH, and the npm fallback for a genuinely absent command.
+[`docs/toolchain-search.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/toolchain-search.md)
+records a reproducible probe of that behavior.
 
 ### A real broken global install (measured)
 
