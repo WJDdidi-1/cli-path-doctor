@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/contexts.mjs';
-import { describeMiss, lookupCommand } from '../lib/path-resolver.mjs';
+import { describeMiss, findCommandCopies, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
 import { inspectToolchainBins, toolchainHint } from '../lib/toolchain-metadata.mjs';
 import { buildFixes } from '../lib/fixes.mjs';
@@ -26,9 +26,10 @@ Contexts (one row each):
   daemon-like  a minimal system PATH, similar to launchd, systemd, or CI
 
 The default output is one line per context: the command's resolved path, or
-MISS with the reason. Copy-paste fixes and other human guidance go to stderr
-so stdout stays one row per context. Exit 0 if at least one context resolves
-<command>, otherwise exit 1.
+MISS with the reason. If a context has more than one runnable copy, the row
+names the winning path and every path it shadows. Copy-paste fixes and other
+human guidance go to stderr so stdout stays one row per context. Exit 0 if at
+least one context resolves <command>, otherwise exit 1.
 
 Options:
   --json       machine-readable output
@@ -50,6 +51,9 @@ MVP features:
     command, otherwise exit 1.
   - Name the startup file to edit (for example ~/.zshrc or ~/.bashrc) and do
     not suggest a PATH directory that cannot contain the command.
+  - List every copy of the command that a context's PATH can reach, say which
+    copy wins, and report the directories it shadows; --json exposes the same
+    copies. A fix never exports a directory that is already on the current PATH.
   - Support --json and run fully offline with no account or network call.
 `;
 
@@ -104,12 +108,32 @@ function indentFix(fix, indent) {
   return String(fix).split('\n').join(`\n${indent}`);
 }
 
+function shadowSuffix(row) {
+  const shadowed = Array.isArray(row.shadowed) ? row.shadowed : [];
+  if (!row.resolved || shadowed.length === 0) return '';
+  return ` (wins; shadows ${shadowed.map((copy) => copy.path).join(', ')})`;
+}
+
+function shadowLines(rows) {
+  return rows
+    .filter((row) => row.resolved && Array.isArray(row.shadowed) && row.shadowed.length > 0)
+    .map((row) => `  ${row.name}: ${row.path} wins; shadowed: ${row.shadowed
+      .map((copy) => copy.path)
+      .join(', ')}`);
+}
+
 function runCommand(command, options) {
   const shell = process.platform === 'win32' ? null : resolveShell(process.env, process.platform);
   const rcFile = rcFileForShell(shell, process.platform);
   const contexts = buildContexts();
   const pathValues = contexts.map((environment) => environment.pathValue);
-  const npmInspection = inspectNpmBins(command, { shell, rcFile });
+  const currentContext = contexts.find((environment) => environment.name === 'current');
+  const currentPathValues = currentContext ? [currentContext.pathValue] : [];
+  const npmInspection = inspectNpmBins(command, {
+    shell,
+    rcFile,
+    pathValues: currentPathValues,
+  });
   const toolchainInspection = inspectToolchainBins(command, { shell, rcFile });
   const npmHintValue = npmHint(npmInspection, { pathValues });
   const toolchainHintValue = toolchainHint(toolchainInspection, { pathValues });
@@ -130,11 +154,13 @@ function runCommand(command, options) {
     : null;
 
   const rows = contexts.map((environment) => {
-    const result = lookupCommand(command, environment.pathValue, {
+    const lookupOptions = {
       platform: process.platform,
       env: process.env,
       cwd: process.cwd(),
-    });
+    };
+    const result = lookupCommand(command, environment.pathValue, lookupOptions);
+    const copies = findCommandCopies(command, environment.pathValue, lookupOptions).copies;
 
     const reason = result.resolved ? null : describeMiss(result, hint);
 
@@ -149,6 +175,8 @@ function runCommand(command, options) {
       realPath: result.realPath || null,
       symlink: Boolean(result.symlink),
       linkTarget: result.linkTarget || null,
+      copies,
+      shadowed: copies.filter((copy) => copy.shadowed),
       reason,
     };
   });
@@ -183,6 +211,9 @@ function runCommand(command, options) {
       realPath: row.realPath,
       symlink: row.symlink,
       linkTarget: row.linkTarget,
+      copies: row.copies,
+      shadowed: row.shadowed,
+      shadowedPaths: row.shadowed.map((copy) => copy.path),
       reason: row.reason,
       searchPath: row.pathValue,
       pathValue: row.pathValue,
@@ -190,6 +221,50 @@ function runCommand(command, options) {
       note: row.note,
       reliable: row.reliable,
     }));
+
+    // The same executable is often visible in several contexts. The flat
+    // top-level list is unique by path, while each context row below keeps its
+    // own resolution order.
+    const uniqueCopies = new Map();
+    for (const row of rows) {
+      for (const copy of row.copies) {
+        const key = process.platform === 'win32' ? copy.path.toLowerCase() : copy.path;
+        const existing = uniqueCopies.get(key);
+        if (existing) {
+          existing.contexts.push(row.name);
+          if (copy.winner) existing.winnerIn.push(row.name);
+          if (copy.shadowed) existing.shadowedIn.push(row.name);
+          existing.winner = existing.winner || Boolean(copy.winner);
+          existing.shadowed = existing.shadowed || Boolean(copy.shadowed);
+          continue;
+        }
+
+        uniqueCopies.set(key, {
+          ...copy,
+          command,
+          context: row.name,
+          contexts: [row.name],
+          winnerIn: copy.winner ? [row.name] : [],
+          shadowedIn: copy.shadowed ? [row.name] : [],
+        });
+      }
+    }
+
+    const flatCopies = [...uniqueCopies.values()];
+    const shadowedCopies = flatCopies.filter((copy) => copy.shadowed);
+    const shadowedPaths = shadowedCopies.map((copy) => copy.path);
+    const copiesByContext = Object.fromEntries(
+      rows.map((row) => [row.name, row.copies]),
+    );
+    const shadowing = rows
+      .filter((row) => row.resolved && row.shadowed.length > 0)
+      .map((row) => ({
+        context: row.name,
+        winner: row.path,
+        winnerPath: row.path,
+        copies: row.copies.map((copy) => copy.path),
+        shadowed: row.shadowed.map((copy) => copy.path),
+      }));
 
     const toolchainPayload = {
       command: toolchainInspection.command,
@@ -208,6 +283,11 @@ function runCommand(command, options) {
       path: firstResolved ? firstResolved.path : null,
       contexts: jsonRows,
       rows: jsonRows,
+      copies: flatCopies,
+      copiesByContext,
+      shadowed: shadowedCopies,
+      shadowedPaths,
+      shadowing,
       shell,
       shellName: shellName(shell),
       rcFile,
@@ -233,10 +313,11 @@ function runCommand(command, options) {
   } else {
     const width = rows.reduce((largest, row) => Math.max(largest, row.name.length), 0);
     for (const row of rows) {
-      const rendered = row.resolved ? row.path : `MISS (${row.reason})`;
+      const rendered = row.resolved ? `${row.path}${shadowSuffix(row)}` : `MISS (${row.reason})`;
       process.stdout.write(`${row.name.padEnd(width)}  ${rendered}\n`);
     }
 
+    const copies = shadowLines(rows);
     if (options.verbose) {
       process.stdout.write('\nDetails:\n');
       for (const row of rows) {
@@ -248,6 +329,10 @@ function runCommand(command, options) {
       if (loginOnlyDirectory) {
         process.stdout.write(`  first login-only PATH directory: ${loginOnlyDirectory}\n`);
       }
+      if (copies.length > 0) {
+        process.stdout.write('  shadowed copies:\n');
+        for (const line of copies) process.stdout.write(`${line}\n`);
+      }
       if (fixes.length > 0) {
         process.stdout.write('  fixes:\n');
         for (const fix of fixes) process.stdout.write(`    ${indentFix(fix, '    ')}\n`);
@@ -256,6 +341,10 @@ function runCommand(command, options) {
       const guidance = [];
       if (loginOnlyDirectory) {
         guidance.push(`first login-only PATH directory: ${loginOnlyDirectory}`);
+      }
+      if (copies.length > 0) {
+        guidance.push('shadowed copies:');
+        for (const line of copies) guidance.push(line);
       }
       if (fixes.length > 0) {
         guidance.push('fixes:');
