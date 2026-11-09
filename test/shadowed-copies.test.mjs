@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { findCommandCopies } from '../lib/path-resolver.mjs';
 
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cli-path-doctor.mjs');
 const isWindows = process.platform === 'win32';
@@ -155,6 +156,42 @@ test('stays quiet when one copy is reachable, even if PATH repeats its directory
     assert.deepEqual(data.shadowed, []);
     assert.deepEqual(data.shadowedPaths, []);
     assert.deepEqual(data.shadowing, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('only runnable PATH lookups count as copies', { skip: isWindows }, () => {
+  const root = makeTemp('cli-path-doctor-copy-rules-');
+  const command = `cli-path-doctor-copy-rules-${process.pid}-${Date.now()}`;
+  const winner = makeCopy(root, path.join('a', 'bin'), command);
+
+  // A same-named file without an executable bit cannot be run, so it is not a
+  // copy the winner can shadow.
+  const nonExecutableDir = path.join(root, 'b', 'bin');
+  const nonExecutable = path.join(nonExecutableDir, command);
+  mkdirSync(nonExecutableDir, { recursive: true });
+  writeFileSync(nonExecutable, '#!/bin/sh\nexit 0\n', 'utf8');
+  chmodSync(nonExecutable, 0o644);
+
+  // A broken symlink is left by a failed install, not a runnable copy.
+  const brokenDir = path.join(root, 'c', 'bin');
+  const brokenLink = path.join(brokenDir, command);
+  mkdirSync(brokenDir, { recursive: true });
+  symlinkSync(path.join(root, 'missing-target'), brokenLink);
+
+  const pathValue = [winner.directory, nonExecutableDir, brokenDir, basePath].join(path.delimiter);
+  const options = { platform: process.platform, env: process.env };
+
+  try {
+    const result = findCommandCopies(command, pathValue, options);
+    assert.equal(result.copies.length, 1);
+    assert.equal(result.winner.path, winner.executable);
+    assert.deepEqual(result.shadowed, []);
+
+    // A command written as a path is not looked up on PATH, so it cannot be
+    // shadowed by (or shadow) anything.
+    assert.deepEqual(findCommandCopies(winner.executable, pathValue, options).copies, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
