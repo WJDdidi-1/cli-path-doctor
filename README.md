@@ -3,17 +3,20 @@
 [![CI](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml)
 [![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
 
-Diagnose why a CLI command is missing across shells, npm installs, and daemons.
+Diagnose why a CLI command is missing across shells, npm installs, toolchains,
+and daemons.
 
 A bare `command not found` gives you no clue which layer broke. `cli-path-doctor`
 resolves the command in four PATH contexts, inspects npm's global and local bin
-links, and prints the layer that failed plus a copy-paste fix. It runs fully
-offline: no account, no network call.
+links, searches the user-level bin directories used by cargo, bun, volta, go and
+other toolchains, and prints the layer that failed plus a copy-paste fix. It runs
+fully offline: no account, no network call.
 
 ## Who it is for
 
-Developers and CI/release engineers who install CLIs with npm, apt, or curl, then
-invoke them from an interactive shell, a daemon, or a CI job.
+Developers and CI/release engineers who install CLIs with npm, cargo, bun, volta,
+go, pipx/uv, apt, or curl, then invoke them from an interactive shell, a daemon,
+or a CI job.
 
 ## Releases
 
@@ -27,10 +30,12 @@ shipped the global broken-`bin`-target diagnosis measured below.
 ## The problem
 
 A documented command is absent, or resolves in one context but not another,
-because PATH, npm bin links, executable bits, and postinstall behavior differ
-between interactive shells, daemons, and CI. `which` and `command -v` only
-inspect the current process PATH; they say nothing about login-shell startup,
-npm's `bin` field or link state, or the reduced PATH a daemon inherits.
+because PATH, npm bin links, toolchain bin directories, executable bits, and
+postinstall behavior differ between interactive shells, daemons, and CI.
+`which` and `command -v` only inspect the current process PATH; they say nothing
+about login-shell startup, npm's `bin` field or link state, the user-level
+directory where cargo, bun, volta, or go installed the binary, or the reduced
+PATH a daemon inherits.
 
 ## Install
 
@@ -133,7 +138,8 @@ Reading the output:
 - A PATH fix is only offered for a directory that actually contains the
   command. The login-only directory is explained, but it is not suggested just
   because it differs between contexts. When the command is missing everywhere,
-  the doctor still prints the `npm install -g` line.
+  the doctor prints the `npm install -g` line only if neither npm metadata nor a
+  searched toolchain directory contains it.
 - Each POSIX PATH fix names the shell startup file to edit, so the advice can be
   followed without guessing where PATH is set.
 - The exit code is `0` because at least one checked context resolves the
@@ -191,6 +197,58 @@ $ echo $?
 look longer than the setup commands.) The doctor found the npm layer even though
 the link was never on PATH, and it distinguished a broken link from a missing
 binary, a non-executable file, and a missing package `bin` target.
+
+### A real toolchain session (cargo)
+
+The doctor also searches the directories where modern toolchains install
+commands, even when those directories are not on PATH. Here `rg` exists at
+`~/.cargo/bin/rg` under a probe HOME, and no checked PATH contains
+`~/.cargo/bin`:
+
+```console
+$ home=/tmp/path-doctor-cargo-demo
+$ rm -rf "$home" && mkdir -p "$home/.cargo/bin"
+$ printf '#!/bin/sh\nexit 0\n' > "$home/.cargo/bin/rg"
+$ chmod +x "$home/.cargo/bin/rg"
+$ base=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+$ HOME="$home" \
+    CLI_PATH_DOCTOR_LOGIN_PATH="$base" \
+    CLI_PATH_DOCTOR_NON_LOGIN_PATH="$base" \
+    CLI_PATH_DOCTOR_DAEMON_PATH="$base" \
+    PATH="$base" \
+    node ./bin/cli-path-doctor.mjs rg
+current      MISS (not found on PATH; installed at /tmp/path-doctor-cargo-demo/.cargo/bin/rg but not on PATH)
+login        MISS (not found on PATH; installed at /tmp/path-doctor-cargo-demo/.cargo/bin/rg but not on PATH)
+non-login    MISS (not found on PATH; installed at /tmp/path-doctor-cargo-demo/.cargo/bin/rg but not on PATH)
+daemon-like  MISS (not found on PATH; installed at /tmp/path-doctor-cargo-demo/.cargo/bin/rg but not on PATH)
+fixes:
+  export PATH='/tmp/path-doctor-cargo-demo/.cargo/bin':"$PATH"  # add to ~/.zshrc, then open a new shell
+$ echo $?
+1
+```
+
+The rows name the installed binary, and the fix names the directory to add plus
+the startup file for the detected shell. There is no `npm install -g` line,
+because `rg` was not installed with npm. The search covers:
+
+| Toolchain | Directories |
+| --- | --- |
+| Rust / cargo | `$CARGO_HOME/bin`, then `~/.cargo/bin` |
+| Bun | `$BUN_INSTALL/bin`, then `~/.bun/bin` |
+| Volta | `$VOLTA_HOME/bin`, then `~/.volta/bin` (or `%LOCALAPPDATA%\Volta\bin` on Windows) |
+| Go | `$GOBIN`, each `$GOPATH/bin`, then `~/go/bin` |
+| Deno | `$DENO_INSTALL/bin`, then `~/.deno/bin` |
+| pnpm | `$PNPM_HOME`, `~/.local/share/pnpm`, `~/Library/pnpm`, and `%LOCALAPPDATA%/pnpm` on Windows |
+| Yarn classic | `~/.yarn/bin` |
+| Version managers | `~/.asdf/shims`, `~/.local/share/mise/shims`, `~/.pyenv/shims`, `~/.rbenv/shims` (and their configured data/root variables) |
+| Per-user installers | `~/.local/bin` (pipx, uv, standalone tools) |
+
+A configured variable is searched in addition to the default directory, so
+setting `CARGO_HOME` or `BUN_INSTALL` does not hide a binary that still lives in
+the default location. A binary found in a non-executable state gets a
+`chmod +x` fix; a broken link is reported as broken and is not turned into PATH
+advice. `--json` exposes the whole search under `toolchains`.
 
 ### A real broken global install (measured)
 
@@ -340,6 +398,7 @@ and exact setup are in
 | `loginOnlyDirectory` | The first login-only PATH directory, or `null`. |
 | `fixes` | Copy-paste fixes, as an array of strings. POSIX PATH fixes embed the startup file name. |
 | `npm` | `prefix`, `globalPrefix`, `preferred`, `candidates`, `local`, `global`, `packages`, `hint`, and `fixes`. |
+| `toolchains` (also `toolchain`) | `command`, `home`, `directories`, `candidates`, `preferred`, and `hint` for the user-level cargo, bun, volta, go, deno, pnpm, shim, and `~/.local/bin` search. |
 
 `fixes` is the same array the default text mode writes to stderr, so tooling can
 read the advice without scraping output. A POSIX PATH entry is one copy-pasteable
@@ -358,7 +417,8 @@ is `/tmp/path-doctor-demo/bin` returns (abridged to the shell and fix fields):
 ```
 
 The top-level `rcFile` matches the file named inside the fix. When no checked
-directory can contain the command and there is no npm evidence, `fixes` holds
+directory can contain the command, and there is neither npm evidence nor a
+binary in a searched toolchain directory, `fixes` holds
 `npm install -g '<command>'` instead. The zsh and bash mappings are verified by
 a scripted probe, `sh docs/probes/shell-aware-fixes.sh`, which asserts both the
 JSON fields and the text stderr; the captured run and assertions are in
@@ -366,7 +426,10 @@ JSON fields and the text stderr; the captured run and assertions are in
 
 `npm.packages` includes package `bin` declarations even when the
 `node_modules/.bin` link was never created, and reports the target, link,
-symlink target, executable bit, and broken/missing state.
+symlink target, executable bit, and broken/missing state. `toolchains.candidates`
+reports the same fields for a binary found in a user-level toolchain directory,
+plus `toolchain`, `directory`, and `directorySource`; `toolchains.hint` is the
+sentence embedded in a `MISS` row.
 
 ## What the MVP does
 
@@ -377,14 +440,18 @@ symlink target, executable bit, and broken/missing state.
   and executable bits. It reads package `bin` declarations even when the link
   was never created, including a global package whose declared target is
   missing.
+- Search the user-level bin directories used by cargo/rustup, bun, volta, go,
+  deno, pnpm, yarn, asdf, mise, pyenv, rbenv, and per-user installers such as
+  pipx/uv (`~/.local/bin`). A binary found there is reported with its full path
+  and suppresses the `npm install -g` line.
 - Name the first PATH directory present in a login shell but absent from the
   daemon/CI environment, when one exists. That directory is only turned into a
   PATH fix when it actually contains the command.
 - Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or
   `chmod +x` as appropriate). POSIX PATH fixes name the startup file for the
   detected shell (`~/.zshrc`, `~/.bashrc`, ...), and the install line is kept
-  when no directory can contain the command. Human guidance goes to stderr so
-  stdout stays one row per context.
+  only when no checked directory or toolchain contains the command. Human
+  guidance goes to stderr so stdout stays one row per context.
 - Support `--json` and run fully offline with no account or network call.
 
 ## Exit codes
@@ -424,6 +491,15 @@ cli-path-doctor node --verbose
 `type` (POSIX) reports whether the name is an alias, a function, or a file on
 PATH. If it is an alias or function, add it to the environment the daemon or CI
 job uses, or invoke the real file by path.
+
+### Why does it mention `~/.cargo/bin` when I installed with cargo?
+
+The doctor searches the user-level directories where cargo, bun, volta, go and
+other toolchains install commands. If it finds the binary there, it reports the
+full path and offers a PATH export for that directory instead of
+`npm install -g`, which would install a second, unrelated copy under npm's
+prefix. Use `--json` and read `toolchains.candidates` to see which directory and
+toolchain matched.
 
 ### Why do `login` and `non-login` show the same path as `current`?
 
@@ -489,7 +565,10 @@ npm bin link, package `bin` entries whose link is missing, the npm global prefix
 under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
 declared `bin` target is missing, shell-aware PATH fixes for zsh and bash, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
-fixes, and offline `--json` output.
+fixes, offline `--json` output, and user-level cargo, bun, volta, and go bin
+directories (including `CARGO_HOME`, a non-executable toolchain binary, a
+toolchain directory already on PATH, and npm metadata for the same command
+losing to the toolchain evidence).
 
 To re-run the shell-aware verification against a real npm-prefix fixture:
 

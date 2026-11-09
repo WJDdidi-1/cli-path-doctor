@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/contexts.mjs';
 import { describeMiss, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
+import { inspectToolchainBins, toolchainHint } from '../lib/toolchain-metadata.mjs';
 import { buildFixes } from '../lib/fixes.mjs';
 import { rcFileForShell, shellName } from '../lib/shell-rc.mjs';
 
@@ -10,7 +11,7 @@ const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ).version;
 
-const USAGE = `cli-path-doctor: diagnose why a CLI command is missing across shells, npm installs, and daemons.
+const USAGE = `cli-path-doctor: diagnose why a CLI command is missing across shells, npm installs, toolchains, and daemons.
 
 Usage:
   cli-path-doctor <command>
@@ -40,6 +41,9 @@ MVP features:
     the resolved path or a miss.
   - Inspect local npm metadata: global prefix, node_modules/.bin, package bin
     entries, symlink targets, and executable bits.
+  - Search user-level toolchain bin directories (cargo/rustup, bun, volta, go,
+    deno, pnpm, yarn, asdf, mise, pyenv, rbenv, and ~/.local/bin) so a command
+    installed there is named and fixed by adding that directory to PATH.
   - Name the first PATH directory present in a login shell but absent from the
     daemon-like environment, when one exists.
   - Print copy-paste fixes and exit 0 if any checked context resolves the
@@ -104,10 +108,20 @@ function runCommand(command, options) {
   const shell = process.platform === 'win32' ? null : resolveShell(process.env, process.platform);
   const rcFile = rcFileForShell(shell, process.platform);
   const contexts = buildContexts();
+  const pathValues = contexts.map((environment) => environment.pathValue);
   const npmInspection = inspectNpmBins(command, { shell, rcFile });
-  const hint = npmHint(npmInspection, {
-    pathValues: contexts.map((environment) => environment.pathValue),
-  });
+  const toolchainInspection = inspectToolchainBins(command, { shell, rcFile });
+  const npmHintValue = npmHint(npmInspection, { pathValues });
+  const toolchainHintValue = toolchainHint(toolchainInspection, { pathValues });
+  const preferredToolchain = toolchainInspection.preferred;
+  const usableToolchain = Boolean(preferredToolchain
+    && preferredToolchain.exists
+    && preferredToolchain.isFile
+    && preferredToolchain.executable
+    && !preferredToolchain.broken);
+  // A usable toolchain binary is the installation the user is asking about, so
+  // its explanation wins over incidental npm metadata with the same name.
+  const hint = (usableToolchain ? toolchainHintValue : null) || npmHintValue || toolchainHintValue;
 
   const loginContext = contexts.find((environment) => environment.name === 'login');
   const daemonContext = contexts.find((environment) => environment.name === 'daemon-like');
@@ -153,6 +167,7 @@ function runCommand(command, options) {
     rows,
     loginOnlyDirectory,
     npmInspection,
+    toolchainInspection,
     platform: process.platform,
     shell,
     rcFile,
@@ -176,6 +191,15 @@ function runCommand(command, options) {
       reliable: row.reliable,
     }));
 
+    const toolchainPayload = {
+      command: toolchainInspection.command,
+      home: toolchainInspection.home,
+      directories: toolchainInspection.directories,
+      candidates: toolchainInspection.candidates,
+      preferred: toolchainInspection.preferred,
+      hint: toolchainHintValue,
+    };
+
     const payload = {
       command,
       resolved: anyResolved,
@@ -198,9 +222,11 @@ function runCommand(command, options) {
         local: npmInspection.local,
         global: npmInspection.global,
         packages: npmInspection.packages,
-        hint,
+        hint: npmHintValue,
         fixes: npmInspection.fixes,
       },
+      toolchains: toolchainPayload,
+      toolchain: toolchainPayload,
     };
 
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -217,7 +243,8 @@ function runCommand(command, options) {
         const note = row.note ? `; ${row.note}` : '';
         process.stdout.write(`  ${row.name}: ${row.source}${note}\n`);
       }
-      if (hint) process.stdout.write(`  npm: ${hint}\n`);
+      if (npmHintValue) process.stdout.write(`  npm: ${npmHintValue}\n`);
+      if (toolchainHintValue) process.stdout.write(`  toolchains: ${toolchainHintValue}\n`);
       if (loginOnlyDirectory) {
         process.stdout.write(`  first login-only PATH directory: ${loginOnlyDirectory}\n`);
       }
