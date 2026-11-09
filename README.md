@@ -339,6 +339,29 @@ and exact setup are in
 | `fixes` | Copy-paste fixes, as an array of strings. POSIX PATH fixes embed the startup file name. |
 | `npm` | `prefix`, `globalPrefix`, `preferred`, `candidates`, `local`, `global`, `packages`, `hint`, and `fixes`. |
 
+`fixes` is the same array the default text mode writes to stderr, so tooling can
+read the advice without scraping output. A POSIX PATH entry is one copy-pasteable
+line that embeds the file to edit. For example, a bash run whose npm prefix bin
+is `/tmp/path-doctor-demo/bin` returns (abridged to the shell and fix fields):
+
+```json
+{
+  "shell": "/bin/bash",
+  "shellName": "bash",
+  "rcFile": "~/.bashrc",
+  "fixes": [
+    "export PATH='/tmp/path-doctor-demo/bin':\"$PATH\"  # add to ~/.bashrc, then open a new shell"
+  ]
+}
+```
+
+The top-level `rcFile` matches the file named inside the fix. When no checked
+directory can contain the command and there is no npm evidence, `fixes` holds
+`npm install -g '<command>'` instead. The zsh and bash mappings are verified by
+a scripted probe, `sh docs/probes/shell-aware-fixes.sh`, which asserts both the
+JSON fields and the text stderr; the captured run and assertions are in
+[`docs/shell-aware-fixes.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/shell-aware-fixes.md).
+
 `npm.packages` includes package `bin` declarations even when the
 `node_modules/.bin` link was never created, and reports the target, link,
 symlink target, executable bit, and broken/missing state.
@@ -465,6 +488,16 @@ under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
 declared `bin` target is missing, shell-aware PATH fixes for zsh and bash, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
 fixes, and offline `--json` output.
+
+To re-run the shell-aware verification against a real npm-prefix fixture:
+
+```sh
+sh docs/probes/shell-aware-fixes.sh
+```
+
+It prints the zsh and bash JSON excerpts and text fixes, and exits `0` only when
+each names the right rc file. The captured run is in
+[`docs/shell-aware-fixes.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/shell-aware-fixes.md).
 
 ## Status
 

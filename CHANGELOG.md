@@ -13,6 +13,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fixes name `$PROFILE`.
 - `--json` now exposes `shellName` and `rcFile` alongside the existing `fixes`
   array, so tooling can read the same shell-aware advice.
+- The `fixes` array is documented as the machine-readable copy of the stderr
+  guidance: each POSIX PATH entry is one copy-pasteable line that embeds the
+  startup file to edit (for example
+  `export PATH='<dir>':"$PATH"  # add to ~/.bashrc, then open a new shell`).
+  When no directory can contain the command, the array falls back to
+  `npm install -g '<command>'`.
+- A scripted probe (`docs/probes/shell-aware-fixes.sh`) verifies the shell
+  mapping with `SHELL=/bin/zsh` and `SHELL=/bin/bash`. It asserts the JSON
+  `rcFile` and `fixes` fields and the text stderr, and rejects the unrelated
+  login-only directory and a needless reinstall. The commands, captured
+  output, and assertions are recorded in `docs/shell-aware-fixes.md`.
 
 ### Fixed
 
