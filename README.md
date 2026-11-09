@@ -195,6 +195,8 @@ With `--json`, every context carries `copies` (each entry has `path`,
 copy seen in several contexts is one entry with `contexts`, `winnerIn`, and
 `shadowedIn`), a `copiesByContext` map, flat `shadowed`/`shadowedPaths`
 lists, and a `shadowing` summary with the winner and shadowed paths per context.
+The reproducible two-copy fixture, the single-copy check, and a captured run are
+in [`docs/shadowed-copies.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/shadowed-copies.md).
 
 ### Run the example yourself
 
@@ -643,6 +645,18 @@ of PATH fixes for directories already searched, and user-level cargo, bun,
 volta, and go bin directories (including `CARGO_HOME`, a non-executable
 toolchain binary, a toolchain directory already on PATH, and npm metadata for
 the same command losing to the toolchain evidence).
+
+To re-run the shadowing verification with two real PATH copies and a repeated
+single copy:
+
+```sh
+sh docs/probes/shadowed-copies.sh
+```
+
+It asserts the winner and shadowed path in text and `--json`, checks that no
+useless PATH fix is offered, and confirms a repeated directory is not reported
+as a second copy. The captured run is in
+[`docs/shadowed-copies.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/shadowed-copies.md).
 
 To re-run the shell-aware verification against a real npm-prefix fixture:
 
