@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-10
+
+### Added
+
+- When more than one runnable copy of a command is on a context's PATH, the
+  doctor resolves every copy, marks the first one as the winner, and reports the
+  rest as shadowed. Text output names both paths (`(wins; shadows ...)`) and
+  prints a `shadowed copies:` block on stderr, so a user running 1.0 can see
+  that a 2.0 install exists later on PATH.
+- `--json` exposes the shadowing evidence: per-context `copies` (with `winner`
+  and `shadowed` flags) and `shadowedPaths`, plus top-level `copies`,
+  `shadowed`, `shadowedPaths`, and a `shadowing` summary naming the winner and
+  shadowed paths for each context.
+- A documented probe (`docs/probes/shadowed-copies.sh`) with two real PATH
+  copies and a repeated single copy; the captured run and the JSON fields are in
+  `docs/shadowed-copies.md`.
+- `test/shadowed-copies.test.mjs` covers the two-copy and single-copy cases and
+  the rule that a non-executable file, a broken symlink, or an explicit path is
+  not a PATH lookup that can be shadowed.
+
+### Fixed
+
+- A directory repeated on PATH is no longer counted as a second copy of the
+  command, so the shadowing report stays quiet when there is only one install.
+- A PATH fix is no longer proposed for a directory the context already
+  searches; shadowed-copy reporting leaves the fix list empty when both copies
+  are already reachable.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
@@ -103,6 +131,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Exit codes `0` (at least one context resolves), `1` (no context resolves), and
   `2` (usage error).
 
+[0.5.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/WJDdidi-1/cli-path-doctor/compare/v0.1.0...v0.2.0
