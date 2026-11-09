@@ -4,6 +4,7 @@ import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/con
 import { describeMiss, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
 import { buildFixes } from '../lib/fixes.mjs';
+import { rcFileForShell, shellName } from '../lib/shell-rc.mjs';
 
 const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -43,6 +44,8 @@ MVP features:
     daemon-like environment, when one exists.
   - Print copy-paste fixes and exit 0 if any checked context resolves the
     command, otherwise exit 1.
+  - Name the startup file to edit (for example ~/.zshrc or ~/.bashrc) and do
+    not suggest a PATH directory that cannot contain the command.
   - Support --json and run fully offline with no account or network call.
 `;
 
@@ -93,9 +96,15 @@ function printUsage(stream) {
   stream.write(USAGE);
 }
 
+function indentFix(fix, indent) {
+  return String(fix).split('\n').join(`\n${indent}`);
+}
+
 function runCommand(command, options) {
+  const shell = process.platform === 'win32' ? null : resolveShell(process.env, process.platform);
+  const rcFile = rcFileForShell(shell, process.platform);
   const contexts = buildContexts();
-  const npmInspection = inspectNpmBins(command);
+  const npmInspection = inspectNpmBins(command, { shell, rcFile });
   const hint = npmHint(npmInspection, {
     pathValues: contexts.map((environment) => environment.pathValue),
   });
@@ -145,6 +154,8 @@ function runCommand(command, options) {
     loginOnlyDirectory,
     npmInspection,
     platform: process.platform,
+    shell,
+    rcFile,
   });
 
   if (options.json) {
@@ -173,7 +184,9 @@ function runCommand(command, options) {
       path: firstResolved ? firstResolved.path : null,
       contexts: jsonRows,
       rows: jsonRows,
-      shell: process.platform === 'win32' ? null : resolveShell(process.env, process.platform),
+      shell,
+      shellName: shellName(shell),
+      rcFile,
       loginOnlyDirectory,
       fixes,
       npm: {
@@ -210,7 +223,7 @@ function runCommand(command, options) {
       }
       if (fixes.length > 0) {
         process.stdout.write('  fixes:\n');
-        for (const fix of fixes) process.stdout.write(`    ${fix}\n`);
+        for (const fix of fixes) process.stdout.write(`    ${indentFix(fix, '    ')}\n`);
       }
     } else {
       const guidance = [];
@@ -219,7 +232,7 @@ function runCommand(command, options) {
       }
       if (fixes.length > 0) {
         guidance.push('fixes:');
-        for (const fix of fixes) guidance.push(`  ${fix}`);
+        for (const fix of fixes) guidance.push(`  ${indentFix(fix, '  ')}`);
       }
       if (guidance.length > 0) process.stderr.write(`${guidance.join('\n')}\n`);
     }

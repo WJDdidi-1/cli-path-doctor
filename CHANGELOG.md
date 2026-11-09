@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- POSIX PATH fixes name the shell startup file to edit: `~/.zshrc` for zsh,
+  `~/.bashrc` for bash, and `~/.profile` for an unknown POSIX shell. Windows
+  fixes name `$PROFILE`.
+- `--json` now exposes `shellName` and `rcFile` alongside the existing `fixes`
+  array, so tooling can read the same shell-aware advice.
+
+### Fixed
+
+- The doctor no longer suggests adding the first login-only PATH directory just
+  because it differs between contexts. PATH advice is emitted only for a
+  directory that actually contains the command (a resolved context or an npm
+  bin candidate).
+- When no context resolves the command and there is no npm evidence, the
+  `npm install -g <command>` line is still printed as the actionable fix.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added

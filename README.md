@@ -92,7 +92,9 @@ cli-path-doctor --version
 
 On Windows there is no portable login/non-login shell convention, so those rows
 use the process PATH unless you supply the overrides described below. Command
-lookup honors `PATHEXT`, and fixes are printed in PowerShell form.
+lookup honors `PATHEXT`, and fixes name `$PROFILE` in PowerShell form. On POSIX
+a PATH fix names the startup file for the detected shell (`~/.zshrc` for zsh,
+`~/.bashrc` for bash, and `~/.profile` for an unknown POSIX shell).
 
 ### A real session
 
@@ -115,7 +117,7 @@ non-login    MISS (not found on PATH)
 daemon-like  MISS (not found on PATH; login shell adds /tmp/path-doctor-demo/bin, which this PATH lacks)
 first login-only PATH directory: /tmp/path-doctor-demo/bin
 fixes:
-  export PATH='/tmp/path-doctor-demo/bin':"$PATH"
+  export PATH='/tmp/path-doctor-demo/bin':"$PATH"  # add to ~/.zshrc, then open a new shell
 $ echo $?
 0
 ```
@@ -126,6 +128,12 @@ Reading the output:
   `MISS` with the reason.
 - Human guidance (`first login-only PATH directory` and `fixes`) goes to
   stderr, so `cli-path-doctor <command> | ...` stays one row per line.
+- A PATH fix is only offered for a directory that actually contains the
+  command. The login-only directory is explained, but it is not suggested just
+  because it differs between contexts. When the command is missing everywhere,
+  the doctor still prints the `npm install -g` line.
+- Each POSIX PATH fix names the shell startup file to edit, so the advice can be
+  followed without guessing where PATH is set.
 - The exit code is `0` because at least one checked context resolves the
   command. If every row is `MISS`, the exit code is `1`.
 - The `daemon-like` row names the first directory that the login shell adds and
@@ -148,8 +156,9 @@ npm run example
 
 The script prints the doctor's actual output and exits `0` only when `current`
 and `non-login` miss, `login` resolves, the `daemon-like` row names the
-login-only directory, and stderr prints the matching PATH fix (`export PATH=`
-on POSIX, `$env:Path` on Windows). It is cross-platform, has no dependencies,
+login-only directory, and stderr prints the matching PATH fix with the shell
+startup file to edit (`~/.zshrc`/`~/.bashrc` or `~/.profile` on POSIX, `$PROFILE`
+on Windows). It is cross-platform, has no dependencies,
 makes no network call, and cleans up its temp directory. See
 [`examples/README.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/examples/README.md)
 for the captured output and the exact checks.
@@ -301,7 +310,7 @@ login        MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-
 non-login    MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
 daemon-like  MISS (not found on PATH; npm bin exists at /tmp/path-doctor-global-demo-ok/prefix/bin/demo-ok but is not on this PATH)
 fixes:
-  export PATH='/tmp/path-doctor-global-demo-ok/prefix/bin':"$PATH"
+  export PATH='/tmp/path-doctor-global-demo-ok/prefix/bin':"$PATH"  # add to ~/.zshrc, then open a new shell
 $ echo $?
 1
 ```
@@ -324,8 +333,10 @@ and exact setup are in
 | `path` | The first resolved path, if any. |
 | `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `path`, `realPath`, `symlink`, `linkTarget`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
 | `shell` | The shell used for probing, or `null` on Windows. |
+| `shellName` | The detected shell's basename (`zsh`, `bash`, ...), or `null` if unknown. |
+| `rcFile` | The startup file a PATH fix tells you to edit (`~/.zshrc`, `~/.bashrc`, ...), or `null` on Windows. |
 | `loginOnlyDirectory` | The first login-only PATH directory, or `null`. |
-| `fixes` | Copy-paste fixes, as an array of strings. |
+| `fixes` | Copy-paste fixes, as an array of strings. POSIX PATH fixes embed the startup file name. |
 | `npm` | `prefix`, `globalPrefix`, `preferred`, `candidates`, `local`, `global`, `packages`, `hint`, and `fixes`. |
 
 `npm.packages` includes package `bin` declarations even when the
@@ -342,10 +353,13 @@ symlink target, executable bit, and broken/missing state.
   was never created, including a global package whose declared target is
   missing.
 - Name the first PATH directory present in a login shell but absent from the
-  daemon/CI environment, when one exists.
+  daemon/CI environment, when one exists. That directory is only turned into a
+  PATH fix when it actually contains the command.
 - Print copy-paste fixes (the shell `export PATH=...` form, `npm install`, or
-  `chmod +x` as appropriate). Human guidance goes to stderr so stdout stays one
-  row per context.
+  `chmod +x` as appropriate). POSIX PATH fixes name the startup file for the
+  detected shell (`~/.zshrc`, `~/.bashrc`, ...), and the install line is kept
+  when no directory can contain the command. Human guidance goes to stderr so
+  stdout stays one row per context.
 - Support `--json` and run fully offline with no account or network call.
 
 ## Exit codes
@@ -448,7 +462,8 @@ and checks the publishable package contents with `npm pack --dry-run`. The tests
 cover real PATH resolution, a non-executable file fixed with `chmod`, a broken
 npm bin link, package `bin` entries whose link is missing, the npm global prefix
 under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
-declared `bin` target is missing, the first login-only PATH directory, copy-paste
+declared `bin` target is missing, shell-aware PATH fixes for zsh and bash, a
+found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
 fixes, and offline `--json` output.
 
 ## Status

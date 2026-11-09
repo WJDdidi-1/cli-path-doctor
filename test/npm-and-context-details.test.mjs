@@ -204,7 +204,7 @@ test('reads package.json bin entries even when the bin link is missing', () => {
   }
 });
 
-test('names the first login-only PATH directory and emits a copy-paste fix', () => {
+test('names the first login-only PATH directory without suggesting an unusable PATH entry', () => {
   const first = path.join(tmpdir(), `cli-path-doctor-login-first-${process.pid}`);
   const second = path.join(tmpdir(), `cli-path-doctor-login-second-${process.pid}`);
   const shared = path.join(tmpdir(), `cli-path-doctor-shared-${process.pid}`);
@@ -222,8 +222,12 @@ test('names the first login-only PATH directory and emits a copy-paste fix', () 
   const data = JSON.parse(result.stdout);
   assert.equal(data.loginOnlyDirectory, first);
   assert.ok(
-    data.fixes.some((fix) => /export PATH=|env:Path/.test(fix) && fix.includes(first)),
-    `expected a PATH fix for ${first}: ${JSON.stringify(data.fixes)}`,
+    !data.fixes.some((fix) => /export PATH=|env:Path/.test(fix) && fix.includes(first)),
+    `did not expect a PATH fix for ${first}, which cannot contain the command: ${JSON.stringify(data.fixes)}`,
+  );
+  assert.ok(
+    data.fixes.some((fix) => fix.includes('npm install -g')),
+    `expected the install line when nothing was found: ${JSON.stringify(data.fixes)}`,
   );
 
   const text = run(['cli-path-doctor-no-such-command-42'], { env });
@@ -232,6 +236,10 @@ test('names the first login-only PATH directory and emits a copy-paste fix', () 
   assert.ok(text.stdout.includes(first), `expected ${first} in the daemon row: ${text.stdout}`);
   assert.match(text.stderr, /first login-only PATH directory:/);
   assert.ok(text.stderr.includes(first), text.stderr);
+  assert.ok(
+    !/export PATH=[^\n]*login-first/.test(text.stderr),
+    `did not expect an unusable PATH fix in stderr: ${text.stderr}`,
+  );
 
   const same = run(['cli-path-doctor-no-such-command-42', '--json'], {
     env: {
