@@ -1,7 +1,7 @@
 # cli-path-doctor
 
 [![CI](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
 
 Diagnose why a CLI command is missing across shells, npm installs, toolchains,
 and daemons.
@@ -20,12 +20,15 @@ or a CI job.
 
 ## Releases
 
-This tree is version **0.3.0**. Release tags follow `v<version>`, so its tag is
-`v0.3.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
-describes what shipped in each version. Version 0.3.0 ships shell-aware PATH
-fixes: every POSIX fix names the startup file to edit (`~/.zshrc`,
-`~/.bashrc`, ...), and `--json` exposes `shellName` and `rcFile`. Version 0.2.0
-shipped the global broken-`bin`-target diagnosis measured below.
+This tree is version **0.4.0**. Release tags follow `v<version>`, so its tag is
+`v0.4.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+describes what shipped in each version. Version 0.4.0 ships the user-level
+toolchain search: a command installed by cargo, bun, volta, go, or another
+toolchain is found even when its bin directory is missing from PATH, and the fix
+names that directory instead of suggesting `npm install -g`. Version 0.3.0
+shipped shell-aware PATH fixes: every POSIX fix names the startup file to edit
+(`~/.zshrc`, `~/.bashrc`, ...), and `--json` exposes `shellName` and `rcFile`.
+Version 0.2.0 shipped the global broken-`bin`-target diagnosis measured below.
 
 ## The problem
 
@@ -64,7 +67,7 @@ Verify that the bin link is on your PATH:
 
 ```sh
 cli-path-doctor --version
-# 0.3.0
+# 0.4.0
 
 # POSIX
 command -v cli-path-doctor
@@ -597,7 +600,7 @@ each names the right rc file. The captured run is in
 
 ## Status
 
-Early MVP, version 0.3.0. The features listed above are the scope; anything not
+Early MVP, version 0.4.0. The features listed above are the scope; anything not
 listed is not built yet.
 
 The measured broken-install diagnosis ships in `cli-path-doctor@0.2.0`; the
