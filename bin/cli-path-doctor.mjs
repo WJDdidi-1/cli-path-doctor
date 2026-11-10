@@ -26,10 +26,12 @@ Contexts (one row each):
   daemon-like  a minimal system PATH, similar to launchd, systemd, or CI
 
 The default output is one line per context: the command's resolved path, or
-MISS with the reason. If a context has more than one runnable copy, the row
-names the winning path and every path it shadows. Copy-paste fixes and other
-human guidance go to stderr so stdout stays one row per context. Exit 0 if at
-least one context resolves <command>, otherwise exit 1.
+MISS with the reason. A file that is present and executable but cannot start
+(for example its shebang interpreter is missing) is BROKEN with the reason. If a
+context has more than one runnable copy, the row names the winning path and
+every path it shadows. Copy-paste fixes and other human guidance go to stderr so
+stdout stays one row per context. Exit 0 if at least one context finds a command
+that can start, otherwise exit 1.
 
 Options:
   --json       machine-readable output
@@ -54,6 +56,10 @@ MVP features:
   - List every copy of the command that a context's PATH can reach, say which
     copy wins, and report the directories it shadows; --json exposes the same
     copies. A fix never exports a directory that is already on the current PATH.
+  - Read a script's shebang and report a file that is present but cannot start
+    (missing or non-executable interpreter) as BROKEN, with runnable and
+    unrunnableReason in --json. A plain non-executable file keeps its MISS
+    reason and gets a chmod +x repair.
   - Support --json and run fully offline with no account or network call.
 `;
 
@@ -110,13 +116,13 @@ function indentFix(fix, indent) {
 
 function shadowSuffix(row) {
   const shadowed = Array.isArray(row.shadowed) ? row.shadowed : [];
-  if (!row.resolved || shadowed.length === 0) return '';
+  if (row.status !== 'ok' || shadowed.length === 0) return '';
   return ` (wins; shadows ${shadowed.map((copy) => copy.path).join(', ')})`;
 }
 
 function shadowLines(rows) {
   return rows
-    .filter((row) => row.resolved && Array.isArray(row.shadowed) && row.shadowed.length > 0)
+    .filter((row) => row.status === 'ok' && Array.isArray(row.shadowed) && row.shadowed.length > 0)
     .map((row) => `  ${row.name}: ${row.path} wins; shadowed: ${row.shadowed
       .map((copy) => copy.path)
       .join(', ')}`);
@@ -162,7 +168,21 @@ function runCommand(command, options) {
     const result = lookupCommand(command, environment.pathValue, lookupOptions);
     const copies = findCommandCopies(command, environment.pathValue, lookupOptions).copies;
 
-    const reason = result.resolved ? null : describeMiss(result, hint);
+    const status = result.resolved
+      ? (result.runnable === false ? 'broken' : 'ok')
+      : 'miss';
+    const nonExecutable = Boolean(result.nonExecutable);
+    const foundPath = result.resolved ? result.path : (result.foundPath || null);
+
+    let reason = null;
+    let unrunnableReason = null;
+    if (status === 'broken') {
+      unrunnableReason = result.unrunnableReason || 'the file cannot start';
+      reason = `found at ${result.path} but ${unrunnableReason}`;
+    } else if (status === 'miss') {
+      reason = describeMiss(result, hint);
+      if (nonExecutable) unrunnableReason = reason;
+    }
 
     return {
       name: environment.name,
@@ -170,8 +190,13 @@ function runCommand(command, options) {
       source: environment.source,
       note: environment.note,
       reliable: environment.reliable,
+      status,
       resolved: Boolean(result.resolved),
+      runnable: status === 'ok',
+      unrunnableReason,
       path: result.resolved ? result.path : null,
+      foundPath,
+      nonExecutable,
       realPath: result.realPath || null,
       symlink: Boolean(result.symlink),
       linkTarget: result.linkTarget || null,
@@ -189,6 +214,8 @@ function runCommand(command, options) {
   }
 
   const anyResolved = rows.some((row) => row.resolved);
+  const anyRunnable = rows.some((row) => row.runnable);
+  const firstRunnable = rows.find((row) => row.runnable) || null;
   const firstResolved = rows.find((row) => row.resolved) || null;
   const fixes = buildFixes({
     command,
@@ -205,9 +232,12 @@ function runCommand(command, options) {
     const jsonRows = rows.map((row) => ({
       name: row.name,
       context: row.name,
-      status: row.resolved ? 'ok' : 'miss',
+      status: row.status,
       resolved: row.resolved,
+      runnable: row.runnable,
+      unrunnableReason: row.unrunnableReason,
       path: row.path,
+      foundPath: row.foundPath,
       realPath: row.realPath,
       symlink: row.symlink,
       linkTarget: row.linkTarget,
@@ -257,7 +287,7 @@ function runCommand(command, options) {
       rows.map((row) => [row.name, row.copies]),
     );
     const shadowing = rows
-      .filter((row) => row.resolved && row.shadowed.length > 0)
+      .filter((row) => row.status === 'ok' && row.shadowed.length > 0)
       .map((row) => ({
         context: row.name,
         winner: row.path,
@@ -277,10 +307,13 @@ function runCommand(command, options) {
 
     const payload = {
       command,
+      status: anyRunnable ? 'ok' : anyResolved ? 'broken' : 'miss',
       resolved: anyResolved,
+      runnable: anyRunnable,
       anyResolved,
-      exitCode: anyResolved ? 0 : 1,
-      path: firstResolved ? firstResolved.path : null,
+      anyRunnable,
+      exitCode: anyRunnable ? 0 : 1,
+      path: firstRunnable ? firstRunnable.path : firstResolved ? firstResolved.path : null,
       contexts: jsonRows,
       rows: jsonRows,
       copies: flatCopies,
@@ -313,7 +346,14 @@ function runCommand(command, options) {
   } else {
     const width = rows.reduce((largest, row) => Math.max(largest, row.name.length), 0);
     for (const row of rows) {
-      const rendered = row.resolved ? `${row.path}${shadowSuffix(row)}` : `MISS (${row.reason})`;
+      let rendered;
+      if (row.status === 'ok') {
+        rendered = `${row.path}${shadowSuffix(row)}`;
+      } else if (row.status === 'broken') {
+        rendered = `BROKEN (${row.reason})`;
+      } else {
+        rendered = `MISS (${row.reason})`;
+      }
       process.stdout.write(`${row.name.padEnd(width)}  ${rendered}\n`);
     }
 
@@ -354,7 +394,7 @@ function runCommand(command, options) {
     }
   }
 
-  process.exitCode = anyResolved ? 0 : 1;
+  process.exitCode = anyRunnable ? 0 : 1;
 }
 
 function main(argv) {
