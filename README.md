@@ -139,9 +139,10 @@ $ echo $?
 
 Reading the output:
 
-- stdout contains exactly one row per context. Each row is a resolved path or
-  `MISS` with the reason. When a context has more than one copy, the row names
-  the winning path first and lists every copy it shadows.
+- stdout contains exactly one row per context. Each row is a resolved path,
+  `BROKEN` with the reason (the file was found but cannot start), or `MISS`
+  with the reason. When a context has more than one copy, the row names the
+  winning path first and lists every copy it shadows.
 - Human guidance (`first login-only PATH directory`, `shadowed copies`, and
   `fixes`) goes to stderr, so `cli-path-doctor <command> | ...` stays one row
   per line.
@@ -152,10 +153,63 @@ Reading the output:
   only if neither npm metadata nor a searched toolchain directory contains it.
 - Each POSIX PATH fix names the shell startup file to edit, so the advice can be
   followed without guessing where PATH is set.
-- The exit code is `0` because at least one checked context resolves the
-  command. If every row is `MISS`, the exit code is `1`.
+- The exit code is `0` because at least one checked context can run the
+  command. If every row is `MISS` or `BROKEN`, the exit code is `1`.
 - The `daemon-like` row names the first directory that the login shell adds and
   the daemon PATH lacks, which is the layer that broke.
+
+### Found, but it cannot start
+
+An executable file is not necessarily a command that runs. A script whose
+shebang names a missing interpreter is present on PATH, but the kernel cannot
+start it. The doctor reads the shebang and reports `BROKEN` instead of a
+resolved path:
+
+```console
+$ mkdir -p /tmp/path-doctor-broken-demo/bin
+$ printf '#!/nonexistent/interpreter\necho nope\n' > /tmp/path-doctor-broken-demo/bin/broken-cli
+$ chmod +x /tmp/path-doctor-broken-demo/bin/broken-cli
+
+$ broken_path=/tmp/path-doctor-broken-demo/bin:$PATH
+$ PATH="$broken_path" \
+    CLI_PATH_DOCTOR_LOGIN_PATH="$broken_path" \
+    CLI_PATH_DOCTOR_NON_LOGIN_PATH="$broken_path" \
+    CLI_PATH_DOCTOR_DAEMON_PATH="$broken_path" \
+    cli-path-doctor broken-cli
+current      BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+login        BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+non-login    BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+daemon-like  BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+$ echo $?
+1
+```
+
+The repair is not an install. The file already exists; the missing piece is the
+interpreter on its first line, so the doctor prints no `npm install -g` line.
+Edit the shebang (or reinstall the package that owns the script) and re-run the
+doctor. A command that really is absent is different: no file was found, so the
+install fallback is the only actionable advice:
+
+```console
+$ cli-path-doctor definitely-not-installed-cli
+current      MISS (not found on PATH)
+login        MISS (not found on PATH)
+non-login    MISS (not found on PATH)
+daemon-like  MISS (not found on PATH)
+fixes:
+  npm install -g 'definitely-not-installed-cli'
+$ echo $?
+1
+```
+
+`--json` carries the same distinction: a present-but-unrunnable file has
+`status: "broken"`, `resolved: true`, `runnable: false`, `exitCode: 1`, and an
+`unrunnableReason`, while a genuinely absent command is `status: "miss"` with
+`resolved: false`. A normal command still has `status: "ok"`, `runnable: true`,
+and exit code `0`. A file that only lacks the execute bit stays `MISS` and gets
+`chmod +x`, not an install. The verdict above was verified from a clean
+`npm pack` + `npm install -g` of the built package; the exact run is in
+[`docs/validation/unrunnable-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/unrunnable-clean-install.md).
 
 ### Two installs, one winner (shadowing)
 
@@ -457,9 +511,9 @@ and exact setup are in
 
 | Key | Meaning |
 | --- | --- |
-| `command`, `resolved`, `anyResolved`, `exitCode` | The command and overall outcome. |
-| `path` | The first resolved path, if any. |
-| `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `path`, `realPath`, `symlink`, `linkTarget`, `copies`, `shadowed`, `shadowedPaths`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
+| `command`, `status`, `resolved`, `runnable`, `anyResolved`, `anyRunnable`, `exitCode` | The command and overall outcome. `status` is `ok`, `broken` (found but cannot start), or `miss`. |
+| `path` | The first resolved path, if any. For a broken command it names the file that cannot start. |
+| `contexts` (also `rows`) | One entry per context with `status`, `resolved`, `runnable`, `unrunnableReason`, `path`, `realPath`, `symlink`, `linkTarget`, `copies`, `shadowed`, `shadowedPaths`, `reason`, `searchPath`, `source`, `note`, and `reliable`. |
 | `copies` | Every distinct runnable copy found across the contexts, in first-seen PATH order. Each entry adds `context` (first context that saw it), `contexts`, `command`, `winnerIn`, and `shadowedIn`. |
 | `copiesByContext` | Each context's own resolution order, keyed by context name. |
 | `shadowed` | The subset of `copies` that a winner hides in at least one context. |
@@ -511,6 +565,10 @@ sentence embedded in a `MISS` row.
 - List every runnable copy of the command on each context's PATH, name the
   winner, report the shadowed copies, and expose the same evidence through
   `copies`/`shadowed`/`shadowing` in `--json`.
+- Read a script's shebang and report a command that is present but cannot start
+  (for example its interpreter is missing) as `BROKEN` with the reason. It
+  keeps `resolved: true` but sets `runnable: false` and exits `1`, and it does
+  not propose an install for a file that is already on disk.
 - Inspect npm metadata for local and global installs: the global prefix,
   `node_modules/.bin`, `<prefix>/bin`, package `bin` entries, symlink targets,
   and executable bits. It reads package `bin` declarations even when the link
@@ -535,8 +593,8 @@ sentence embedded in a `MISS` row.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | At least one checked context resolves the command (or help/version was printed). |
-| `1` | No checked context resolves the command. |
+| `0` | At least one checked context can run the command (or help/version was printed). |
+| `1` | No checked context can run the command: every row is `MISS` or `BROKEN`. |
 | `2` | Usage error: missing command, too many arguments, or an unknown option. |
 
 ## Environment overrides
@@ -640,7 +698,9 @@ and checks the publishable package contents with `npm pack --dry-run`. The tests
 cover real PATH resolution, a non-executable file fixed with `chmod`, a broken
 npm bin link, package `bin` entries whose link is missing, the npm global prefix
 under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
-declared `bin` target is missing, shell-aware PATH fixes for zsh and bash, a
+declared `bin` target is missing, a real `npm pack` + `npm install -g` whose
+bad-shebang command is reported `BROKEN` while a real command stays `ok`,
+shell-aware PATH fixes for zsh and bash, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
 fixes, offline `--json` output, shadowed copies in text and `--json`, suppression
 of PATH fixes for directories already searched, and user-level cargo, bun,

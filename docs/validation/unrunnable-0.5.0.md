@@ -330,6 +330,8 @@ The baseline makes the required behavior concrete:
    `npm install -g` line.
 4. A normal command like `good` must continue to resolve and exit `0`.
 
-This page is the recorded "before". The merged implementation should be
-validated from a clean install of the next published version against the same
-three fixtures, and this file should remain the reference for what 0.5.0 said.
+This page is the recorded "before". The merged implementation has since been
+validated from a clean `npm pack` + `npm install -g` of the built package against
+the same fixtures; see
+[`unrunnable-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/unrunnable-clean-install.md).
+This file remains the reference for what 0.5.0 said.
