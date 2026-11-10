@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A command that is present and executable but cannot start is now reported as
+  `BROKEN` instead of `ok`. The doctor reads a script's shebang, so a missing or
+  non-executable interpreter is named in text output and in
+  `--json` (`status: "broken"`, `resolved: true`, `runnable: false`,
+  `unrunnableReason`, exit code `1`). A plain non-executable file keeps its
+  `MISS` reason and gets `chmod +x`, not an `npm install -g` line.
+- A clean-install acceptance test packs the built package, installs the tarball
+  into an isolated prefix, and verifies the installed doctor reports `BROKEN`
+  for a bad-shebang script, `ok` for a real command, and the
+  `npm install -g` fallback for an absent command.
+- README now shows the `BROKEN` output and explains why a present-but-unrunnable
+  file gets no install line, unlike a missing command. The captured
+  clean-install run is in `docs/validation/unrunnable-clean-install.md`.
+
 ## [0.5.0] - 2026-11-10
 
 ### Added
