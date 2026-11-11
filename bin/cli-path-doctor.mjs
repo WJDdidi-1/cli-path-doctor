@@ -4,7 +4,8 @@ import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/con
 import { describeMiss, findCommandCopies, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
 import { inspectToolchainBins, toolchainHint } from '../lib/toolchain-metadata.mjs';
-import { buildFixes } from '../lib/fixes.mjs';
+import { buildFixes, pathDirectoriesToAdd } from '../lib/fixes.mjs';
+import { applyPathFix } from '../lib/apply-fix.mjs';
 import { rcFileForShell, shellName } from '../lib/shell-rc.mjs';
 
 const VERSION = JSON.parse(
@@ -16,6 +17,8 @@ const USAGE = `cli-path-doctor: diagnose why a CLI command is missing across she
 Usage:
   cli-path-doctor <command>
   cli-path-doctor <command> --json
+  cli-path-doctor <command> --fix
+  cli-path-doctor <command> --fix --json
   cli-path-doctor --help
   cli-path-doctor --version
 
@@ -35,6 +38,7 @@ that can start, otherwise exit 1.
 
 Options:
   --json       machine-readable output
+  --fix        append the PATH fix to the detected shell startup file
   --verbose    add shell/PATH diagnostics to text output
   -h, --help   show this help
   -v, --version
@@ -51,6 +55,9 @@ MVP features:
     daemon-like environment, when one exists.
   - Print copy-paste fixes and exit 0 if any checked context resolves the
     command, otherwise exit 1.
+  - Apply the PATH fix with --fix: append one marked, idempotent block per
+    missing directory to the detected startup file (for example ~/.zshrc or
+    ~/.bashrc). Without --fix no file is written.
   - Name the startup file to edit (for example ~/.zshrc or ~/.bashrc) and do
     not suggest a PATH directory that cannot contain the command.
   - List every copy of the command that a context's PATH can reach, say which
@@ -68,6 +75,7 @@ function parseArguments(argv) {
     command: null,
     json: false,
     verbose: false,
+    fix: false,
     help: false,
     version: false,
     error: null,
@@ -90,6 +98,8 @@ function parseArguments(argv) {
       parsed.json = true;
     } else if (argument === '--verbose') {
       parsed.verbose = true;
+    } else if (argument === '--fix') {
+      parsed.fix = true;
     } else if (argument === '--help' || argument === '-h') {
       parsed.help = true;
     } else if (argument === '--version' || argument === '-v') {
@@ -112,6 +122,10 @@ function printUsage(stream) {
 
 function indentFix(fix, indent) {
   return String(fix).split('\n').join(`\n${indent}`);
+}
+
+function isPathFix(fix) {
+  return /^(?:export PATH=|fish_add_path |\$env:Path =)/.test(String(fix));
 }
 
 function shadowSuffix(row) {
@@ -227,6 +241,35 @@ function runCommand(command, options) {
     shell,
     rcFile,
   });
+  const pathDirectories = pathDirectoriesToAdd({
+    command,
+    rows,
+    npmInspection,
+    toolchainInspection,
+    platform: process.platform,
+    shell,
+    rcFile,
+  });
+  const fix = options.fix
+    ? applyPathFix({
+      directories: pathDirectories,
+      shell,
+      rcFile,
+      platform: process.platform,
+    })
+    : null;
+
+  if (fix && !options.json) {
+    if (fix.applied) {
+      process.stderr.write(
+        `cli-path-doctor: applied PATH fix to ${fix.file}; open a new shell to use it\n`,
+      );
+    } else if (fix.alreadyPresent) {
+      process.stderr.write(`cli-path-doctor: ${fix.reason}\n`);
+    } else {
+      process.stderr.write(`cli-path-doctor: cannot apply PATH fix: ${fix.reason}\n`);
+    }
+  }
 
   if (options.json) {
     const jsonRows = rows.map((row) => ({
@@ -324,6 +367,7 @@ function runCommand(command, options) {
       shell,
       shellName: shellName(shell),
       rcFile,
+      fix,
       loginOnlyDirectory,
       fixes,
       npm: {
@@ -358,6 +402,12 @@ function runCommand(command, options) {
     }
 
     const copies = shadowLines(rows);
+    // When --fix handled the PATH lines, repeating them as copy-paste advice
+    // would contradict the "applied" message. Other repairs (chmod, reinstall)
+    // are still printed.
+    const remainingFixes = fix && (fix.applied || fix.alreadyPresent)
+      ? fixes.filter((entry) => !isPathFix(entry))
+      : fixes;
     if (options.verbose) {
       process.stdout.write('\nDetails:\n');
       for (const row of rows) {
@@ -373,9 +423,9 @@ function runCommand(command, options) {
         process.stdout.write('  shadowed copies:\n');
         for (const line of copies) process.stdout.write(`${line}\n`);
       }
-      if (fixes.length > 0) {
+      if (remainingFixes.length > 0) {
         process.stdout.write('  fixes:\n');
-        for (const fix of fixes) process.stdout.write(`    ${indentFix(fix, '    ')}\n`);
+        for (const entry of remainingFixes) process.stdout.write(`    ${indentFix(entry, '    ')}\n`);
       }
     } else {
       const guidance = [];
@@ -386,9 +436,9 @@ function runCommand(command, options) {
         guidance.push('shadowed copies:');
         for (const line of copies) guidance.push(line);
       }
-      if (fixes.length > 0) {
+      if (remainingFixes.length > 0) {
         guidance.push('fixes:');
-        for (const fix of fixes) guidance.push(`  ${indentFix(fix, '  ')}`);
+        for (const entry of remainingFixes) guidance.push(`  ${indentFix(entry, '  ')}`);
       }
       if (guidance.length > 0) process.stderr.write(`${guidance.join('\n')}\n`);
     }
