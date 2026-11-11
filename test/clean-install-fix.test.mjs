@@ -67,16 +67,28 @@ function doctorEnv(home, prefix) {
   };
 }
 
-function loginShellResolves(home, command) {
-  return spawnSync(shell, ['-l', '-c', 'command -v "$1"', 'sh', command], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      PATH: basePath,
+/**
+ * Run the installed tool from inside a real login shell. The shell is entered
+ * with its normal, minimal environment so it reads the temporary HOME's
+ * profile; the tool itself is started through the absolute node path and the
+ * absolute installed bin, so a login shell that resets PATH can never turn the
+ * invocation into a shell lookup failure (127) before the tool runs.
+ */
+function runDoctorInLoginShell(home, installedBin, args) {
+  return spawnSync(
+    shell,
+    ['-l', '-c', 'exec "$0" "$@"', process.execPath, installedBin, ...args],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        CLI_PATH_DOCTOR_SHELL: shell,
+        PATH: basePath,
+      },
     },
-  });
+  );
 }
 
 /**
@@ -177,11 +189,14 @@ test('--fix from a packed install writes an idempotent block a login shell uses'
     assert.equal(readFileSync(rcFile, 'utf8'), afterFirst, 'second --fix must not change the profile');
     assert.equal((afterFirst.match(/# >>> cli-path-doctor:/g) || []).length, 1, afterFirst);
 
-    // A fresh login shell reads the temporary HOME's .profile. The command
-    // must resolve to the real file, not merely appear in the profile text.
-    const resolved = loginShellResolves(home, command);
+    // A fresh login shell reads the temporary HOME's .profile. Run the tool
+    // itself from that shell so the assertion covers the PATH the login shell
+    // actually exports, not merely the text written to the profile.
+    const resolved = runDoctorInLoginShell(home, installedBin, [command, '--json']);
     assert.equal(resolved.status, 0, resolved.stderr);
-    assert.equal(resolved.stdout.trim(), path.join(prefixBin, command));
+    const resolvedData = JSON.parse(resolved.stdout);
+    assert.equal(resolvedData.status, 'ok');
+    assert.equal(resolvedData.path, path.join(prefixBin, command));
 
     // Documented undo: remove the marked block. The unrelated profile setup
     // stays, and the command is no longer resolved by a fresh login shell.
@@ -189,9 +204,13 @@ test('--fix from a packed install writes an idempotent block a login shell uses'
     assert.equal(undone, originalProfile);
     writeFileSync(rcFile, undone, 'utf8');
 
-    const afterUndo = loginShellResolves(home, command);
+    // The tool still starts (absolute node path), so exit 1 is its own verdict
+    // that the command is missing now. A shell lookup failure would be 127.
+    const afterUndo = runDoctorInLoginShell(home, installedBin, [command, '--json']);
     assert.equal(afterUndo.status, 1, `${afterUndo.stdout}\n${afterUndo.stderr}`);
-    assert.equal(afterUndo.stdout.trim(), '');
+    const afterUndoData = JSON.parse(afterUndo.stdout);
+    assert.equal(afterUndoData.status, 'miss');
+    assert.equal(afterUndoData.path, null);
     assert.ok(!readFileSync(rcFile, 'utf8').includes('cli-path-doctor'), readFileSync(rcFile, 'utf8'));
   } finally {
     rmSync(root, { recursive: true, force: true });
