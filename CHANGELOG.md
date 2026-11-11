@@ -8,11 +8,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `--fix` now applies the PATH repair instead of only printing it. The doctor
+  appends the recommended export to the detected shell startup file as one
+  idempotent block per missing directory, between marker comments that name the
+  directory and carry the note
+  `# Managed by cli-path-doctor --fix. Delete this block to undo.` A second
+  `--fix` reports that the fix is already present and leaves the file
+  byte-for-byte unchanged; `--fix --json` exposes `applied`, `alreadyPresent`,
+  `file`, `line`, and `reason`. Deleting the block between the
+  `# >>> cli-path-doctor: ... >>>` and `# <<< cli-path-doctor: ... <<<` markers
+  undoes it in a new shell.
 - Recorded the `--fix` baseline against the published `cli-path-doctor@0.6.0` in
   `docs/validation/fix-0.6.0.md`: the doctor names the PATH directory and
   `~/.zshrc` on stderr, but `--help` has no `--fix`, `--fix` is rejected as an
   unknown option (exit `2`), the JSON only describes the fix, and the rc file's
   SHA-256 is unchanged after diagnosis.
+- Verified `--fix` from a clean install: `test/clean-install-fix.test.mjs` runs
+  `npm pack`, installs the tarball into an isolated prefix, writes the block
+  into a temporary HOME, confirms a second run changes nothing, starts a fresh
+  login shell that resolves the command, and checks the documented block
+  removal. `docs/probes/fix-clean-install.sh` reproduces the same sequence, and
+  the captured run plus undo instructions are in
+  `docs/validation/fix-clean-install.md`. README documents `--fix`, the marker
+  comments, and how to remove the block.
 
 ## [0.6.0] - 2026-11-10
 
