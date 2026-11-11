@@ -9,9 +9,11 @@ and daemons.
 A bare `command not found` gives you no clue which layer broke. `cli-path-doctor`
 resolves the command in four PATH contexts, inspects npm's global and local bin
 links, searches the user-level bin directories used by cargo, bun, volta, go and
-other toolchains, and prints the layer that failed plus a copy-paste fix. When a
-second copy of the command is earlier on PATH, it names both copies and says
-which one wins. It runs fully offline: no account, no network call.
+other toolchains, and prints the layer that failed plus a copy-paste fix. Pass
+`--fix` and it appends that PATH change to the detected shell startup file for
+you, in a marked block you can remove later. When a second copy of the command
+is earlier on PATH, it names both copies and says which one wins. It runs fully
+offline: no account, no network call.
 
 ## Who it is for
 
@@ -23,7 +25,13 @@ or a CI job.
 
 This tree is version **0.6.0**. Release tags follow `v<version>`, so its tag is
 `v0.6.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
-describes what shipped in each version. Version 0.6.0 reports a command that is
+describes what shipped in each version. The unreleased change adds `--fix`:
+instead of only printing the PATH line, the doctor appends a marked, idempotent
+block to the detected startup file (`~/.zshrc`, `~/.bashrc`, ...). See
+[Apply the fix with `--fix`](#apply-the-fix-with---fix) and
+[`docs/validation/fix-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/fix-clean-install.md)
+for the packed-install verification and undo steps.
+Version 0.6.0 reports a command that is
 present and executable but cannot start as `BROKEN` instead of `ok`: the doctor
 reads its shebang and names the missing or non-executable interpreter in text and
 `--json`, and it keeps a plain non-executable file on the `chmod +x` path.
@@ -97,6 +105,8 @@ node ./bin/cli-path-doctor.mjs cli-path-doctor
 cli-path-doctor <command>            # one row per context
 cli-path-doctor <command> --json     # machine-readable output
 cli-path-doctor <command> --verbose  # add shell/PATH details to stdout
+cli-path-doctor <command> --fix      # append the PATH fix to the startup file
+cli-path-doctor <command> --fix --json
 cli-path-doctor --help
 cli-path-doctor --version
 ```
@@ -160,6 +170,60 @@ Reading the output:
   command. If every row is `MISS` or `BROKEN`, the exit code is `1`.
 - The `daemon-like` row names the first directory that the login shell adds and
   the daemon PATH lacks, which is the layer that broke.
+
+### Apply the fix with `--fix`
+
+Diagnosis only prints the PATH line by default. Add `--fix` to append it to the
+startup file the doctor already names for the detected shell:
+
+```console
+$ cli-path-doctor demo-cli --fix
+current      MISS (not found on PATH)
+login        /tmp/path-doctor-demo/bin/demo-cli
+non-login    MISS (not found on PATH)
+daemon-like  MISS (not found on PATH)
+cli-path-doctor: applied PATH fix to /Users/you/.zshrc; open a new shell to use it
+```
+
+Open a new shell (or `exec "$SHELL" -l`) so the startup file is read; the
+running shell keeps its old PATH. `--fix` handles only PATH repairs. Other
+advice, such as `chmod +x` or `npm install -g`, is still printed for you to run.
+
+The doctor appends one block per missing directory, between marker comments
+that include the directory, so the block is identifiable and removable:
+
+```sh
+# >>> cli-path-doctor: /Users/you/.npm-global/bin >>>
+# Managed by cli-path-doctor --fix. Delete this block to undo.
+export PATH='/Users/you/.npm-global/bin':"$PATH"
+# <<< cli-path-doctor: /Users/you/.npm-global/bin <<<
+```
+
+Existing startup-file content is never rewritten, and the fix is idempotent: a
+second `--fix` reports `PATH fix already present in ...` and leaves the file
+byte-for-byte unchanged. With `--json`, the `fix` object reports `applied`,
+`alreadyPresent`, `file`, `line`, and `reason`, so a script can tell what
+happened. `--fix` refuses to guess for an unknown shell and is not supported on
+Windows; use your PowerShell `$PROFILE` there.
+
+#### Undo the fix
+
+Delete the marked block (all four lines, including the undo note) from the
+startup file. For example, this removes every block the doctor manages and keeps
+a backup:
+
+```sh
+sed -i.bak '/^# >>> cli-path-doctor: .* >>>$/,/^# <<< cli-path-doctor: .* <<<$/d' ~/.zshrc
+```
+
+Or open the file and delete from the `# >>> cli-path-doctor: ... >>>` marker
+through the matching `# <<< cli-path-doctor: ... <<<` marker. Open a new shell
+afterwards to return to the old PATH; removing the block does not uninstall the
+command itself. Every fix also carries the note
+`# Managed by cli-path-doctor --fix. Delete this block to undo.`
+The packed-install, second-run, fresh-login-shell, and undo checks are recorded
+in
+[`docs/validation/fix-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/fix-clean-install.md).
 
 ### Found, but it cannot start
 
@@ -590,6 +654,10 @@ sentence embedded in a `MISS` row.
   only when no checked directory or toolchain contains the command. A PATH fix
   is never emitted for a directory that the current PATH already searches.
   Human guidance goes to stderr so stdout stays one row per context.
+- Apply the PATH fix with `--fix`: append a marked, idempotent block to the
+  detected startup file instead of asking you to copy the line yourself.
+  Without `--fix` no file is written; a second `--fix` is a no-op. The marker
+  comments and the undo steps are documented above.
 - Support `--json` and run fully offline with no account or network call.
 
 ## Exit codes
@@ -654,12 +722,19 @@ On Windows the `login` and `non-login` rows use the process PATH unless you set
 
 ### Does it change my PATH or edit my shell profile?
 
-No. It diagnoses and prints copy-paste fixes; it does not apply them. Human
-guidance and fixes go to stderr, so on POSIX you can see just the four rows:
+Not unless you pass `--fix`. Diagnosis alone never writes a file: it prints the
+copy-paste fix to stderr, so on POSIX you can see just the four rows:
 
 ```sh
 cli-path-doctor node 2>/dev/null
 ```
+
+With `--fix`, the doctor appends a marked PATH block to the startup file it
+names for the detected shell. Nothing is sourced into the current process, so
+the new PATH takes effect only in a new shell. To undo it, delete the block
+between the `# >>> cli-path-doctor: ... >>>` and
+`# <<< cli-path-doctor: ... <<<` markers; see
+[Apply the fix with `--fix`](#apply-the-fix-with---fix).
 
 ### Is `daemon-like` my real daemon's PATH?
 
@@ -703,7 +778,9 @@ npm bin link, package `bin` entries whose link is missing, the npm global prefix
 under `NPM_CONFIG_PREFIX`, a real `npm install -g` into an isolated prefix whose
 declared `bin` target is missing, a real `npm pack` + `npm install -g` whose
 bad-shebang command is reported `BROKEN` while a real command stays `ok`,
-shell-aware PATH fixes for zsh and bash, a
+shell-aware PATH fixes for zsh and bash, a packed-install `--fix` that appends a
+marked block to a temporary HOME, is idempotent on a second run, resolves in a
+fresh login shell, and disappears after the documented undo, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
 fixes, offline `--json` output, shadowed copies in text and `--json`, suppression
 of PATH fixes for directories already searched, and user-level cargo, bun,
@@ -732,6 +809,19 @@ sh docs/probes/shell-aware-fixes.sh
 It prints the zsh and bash JSON excerpts and text fixes, and exits `0` only when
 each names the right rc file. The captured run is in
 [`docs/shell-aware-fixes.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/shell-aware-fixes.md).
+
+To re-run the `--fix` acceptance check from a packed install:
+
+```sh
+sh docs/probes/fix-clean-install.sh
+```
+
+It packs the repository, installs the tarball into an isolated prefix, writes
+the block into a temporary HOME, verifies a second run is byte-for-byte
+idempotent, starts a fresh login shell that resolves the command, removes the
+block, and checks that the login shell no longer resolves it. The captured run
+is in
+[`docs/validation/fix-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/fix-clean-install.md).
 
 ## Status
 
