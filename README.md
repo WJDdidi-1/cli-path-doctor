@@ -1,7 +1,7 @@
 # cli-path-doctor
 
 [![CI](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml/badge.svg)](https://github.com/WJDdidi-1/cli-path-doctor/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.7.0-blue)](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
 
 Diagnose why a CLI command is missing across shells, npm installs, toolchains,
 and daemons.
@@ -23,9 +23,9 @@ or a CI job.
 
 ## Releases
 
-This tree is version **0.6.0**. Release tags follow `v<version>`, so its tag is
-`v0.6.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
-describes what shipped in each version. The unreleased change adds `--fix`:
+This tree is version **0.7.0**. Release tags follow `v<version>`, so its tag is
+`v0.7.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/CHANGELOG.md)
+describes what shipped in each version. Version 0.7.0 ships `--fix`:
 instead of only printing the PATH line, the doctor appends a marked, idempotent
 block to the detected startup file (`~/.zshrc`, `~/.bashrc`, ...). See
 [Apply the fix with `--fix`](#apply-the-fix-with---fix) and
@@ -83,7 +83,7 @@ Verify that the bin link is on your PATH:
 
 ```sh
 cli-path-doctor --version
-# 0.6.0
+# 0.7.0
 
 # POSIX
 command -v cli-path-doctor
@@ -825,7 +825,7 @@ is in
 
 ## Status
 
-Early MVP, version 0.6.0. The features listed above are the scope; anything not
+Early MVP, version 0.7.0. The features listed above are the scope; anything not
 listed is not built yet.
 
 The measured broken-install diagnosis ships in `cli-path-doctor@0.2.0`; the
