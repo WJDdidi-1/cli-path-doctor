@@ -1,6 +1,6 @@
 {
   "name": "cli-path-doctor",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Diagnose why a CLI command is missing across shells, npm installs, and daemons.",
   "license": "Apache-2.0",
   "author": "WJDdidi-1",
