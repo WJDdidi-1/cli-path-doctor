@@ -18,6 +18,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `file`, `line`, and `reason`. Deleting the block between the
   `# >>> cli-path-doctor: ... >>>` and `# <<< cli-path-doctor: ... <<<` markers
   undoes it in a new shell.
+- `--fix` now repairs a command that is present but cannot start. For a
+  `BROKEN` row it emits `install the missing shebang interpreter ...` (or
+  `install <env command> on PATH` for a `#!/usr/bin/env` interpreter), and adds
+  `npm install -g '<owning-package>'` only when npm metadata proves the file
+  belongs to that global package. Text mode prints
+  `cli-path-doctor: repair needed: ...` plus the `fixes:` list; `--json`
+  returns a non-empty `fixes` array and `fix.manual: true`, with
+  `fix.applied: false`, `file: null`, `line: null`, and a `reason` naming the
+  cause. A broken command no longer gets
+  `cannot apply PATH fix: ... nothing to fix`, and `--fix` does not write a
+  startup file when there is no PATH directory to add.
+- Verified the broken-shebang repair from a clean install:
+  `test/clean-install-broken-repair.test.mjs` runs `npm pack`, installs the
+  tarball into an isolated prefix, and runs the installed doctor with `--fix`
+  against a `0755` script whose interpreter does not exist.
+  `docs/probes/broken-repair-clean-install.sh` reproduces the run, and the
+  captured text and `--json` output is in
+  `docs/validation/broken-repair-clean-install.md`. README documents the
+  repair, `fix.manual`, and why no startup file is written.
 - Recorded the `--fix` baseline against the published `cli-path-doctor@0.6.0` in
   `docs/validation/fix-0.6.0.md`: the doctor names the PATH directory and
   `~/.zshrc` on stderr, but `--help` has no `--fix`, `--fix` is rejected as an

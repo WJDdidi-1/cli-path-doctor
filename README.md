@@ -11,8 +11,10 @@ resolves the command in four PATH contexts, inspects npm's global and local bin
 links, searches the user-level bin directories used by cargo, bun, volta, go and
 other toolchains, and prints the layer that failed plus a copy-paste fix. Pass
 `--fix` and it appends that PATH change to the detected shell startup file for
-you, in a marked block you can remove later. When a second copy of the command
-is earlier on PATH, it names both copies and says which one wins. It runs fully
+you, in a marked block you can remove later. When the command is present but
+cannot start, `--fix` names the missing interpreter or the owning package
+instead of saying there is nothing to fix. When a second copy of the command is
+earlier on PATH, it names both copies and says which one wins. It runs fully
 offline: no account, no network call.
 
 ## Who it is for
@@ -31,6 +33,11 @@ block to the detected startup file (`~/.zshrc`, `~/.bashrc`, ...). See
 [Apply the fix with `--fix`](#apply-the-fix-with---fix) and
 [`docs/validation/fix-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/fix-clean-install.md)
 for the packed-install verification and undo steps.
+Version 0.7.0 also ships the repair for a `BROKEN` command: `--fix` names the
+missing shebang interpreter, or the owning npm global package when npm metadata
+proves one, and reports `fix.manual: true` instead of
+`no PATH directory to add; nothing to fix`. The packed-install check is in
+[`docs/validation/broken-repair-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/broken-repair-clean-install.md).
 Version 0.6.0 reports a command that is
 present and executable but cannot start as `BROKEN` instead of `ok`: the doctor
 reads its shebang and names the missing or non-executable interpreter in text and
@@ -186,8 +193,11 @@ cli-path-doctor: applied PATH fix to /Users/you/.zshrc; open a new shell to use 
 ```
 
 Open a new shell (or `exec "$SHELL" -l`) so the startup file is read; the
-running shell keeps its old PATH. `--fix` handles only PATH repairs. Other
-advice, such as `chmod +x` or `npm install -g`, is still printed for you to run.
+running shell keeps its old PATH. `--fix` writes a startup file only for a PATH
+repair. Other advice, such as `chmod +x`, `npm install -g`, or the repair for a
+broken shebang, is printed for you to run. In that case `--json` reports
+`fix.manual: true` with `file: null` and a `fix.reason` that names the cause;
+see [Found, but it cannot start](#found-but-it-cannot-start).
 
 The doctor appends one block per missing directory, between marker comments
 that include the directory, so the block is identifiable and removable:
@@ -252,10 +262,54 @@ $ echo $?
 ```
 
 The repair is not an install. The file already exists; the missing piece is the
-interpreter on its first line, so the doctor prints no `npm install -g` line.
-Edit the shebang (or reinstall the package that owns the script) and re-run the
-doctor. A command that really is absent is different: no file was found, so the
-install fallback is the only actionable advice:
+interpreter on its first line, so the doctor prints no `npm install -g` line for
+a path-local script. Add `--fix` and the doctor returns the repair instead of
+refusing:
+
+```console
+$ PATH="$broken_path" \
+    CLI_PATH_DOCTOR_LOGIN_PATH="$broken_path" \
+    CLI_PATH_DOCTOR_NON_LOGIN_PATH="$broken_path" \
+    CLI_PATH_DOCTOR_DAEMON_PATH="$broken_path" \
+    cli-path-doctor broken-cli --fix
+current      BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+login        BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+non-login    BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+daemon-like  BROKEN (found at /tmp/path-doctor-broken-demo/bin/broken-cli but shebang interpreter /nonexistent/interpreter does not exist)
+cli-path-doctor: repair needed: broken-cli cannot start: shebang interpreter /nonexistent/interpreter does not exist; repair: install the missing shebang interpreter /nonexistent/interpreter, or change the shebang in '/tmp/path-doctor-broken-demo/bin/broken-cli'
+fixes:
+  install the missing shebang interpreter /nonexistent/interpreter, or change the shebang in '/tmp/path-doctor-broken-demo/bin/broken-cli'
+```
+
+All four verdict rows still go to stdout; the repair goes to stderr with the
+other human guidance. The exit code stays `1` because no context can run the
+command. There is no PATH directory to append, so `--fix` writes no startup
+file: the repair is printed for you to run. Edit the shebang (or reinstall the
+owning package) and re-run the doctor.
+
+With `--json`, the repair is in `fixes` and the `fix` object records that it is
+manual:
+
+```json
+"fixes": [
+  "install the missing shebang interpreter /nonexistent/interpreter, or change the shebang in '/tmp/path-doctor-broken-demo/bin/broken-cli'"
+],
+"fix": {
+  "applied": false,
+  "file": null,
+  "line": null,
+  "alreadyPresent": false,
+  "manual": true,
+  "reason": "broken-cli cannot start: shebang interpreter /nonexistent/interpreter does not exist; repair: install the missing shebang interpreter /nonexistent/interpreter, or change the shebang in '/tmp/path-doctor-broken-demo/bin/broken-cli'"
+}
+```
+
+`fix.manual: true` means the doctor has actionable advice but deliberately did
+not edit a file. When npm metadata shows the file belongs to a global package
+under the configured npm prefix, the repair also names
+`npm install -g '<owning-package>'`; otherwise it does not guess a package named
+after the command. A command that really is absent is different: no file was
+found, so the install fallback is the only actionable advice:
 
 ```console
 $ cli-path-doctor definitely-not-installed-cli
@@ -274,9 +328,12 @@ $ echo $?
 `unrunnableReason`, while a genuinely absent command is `status: "miss"` with
 `resolved: false`. A normal command still has `status: "ok"`, `runnable: true`,
 and exit code `0`. A file that only lacks the execute bit stays `MISS` and gets
-`chmod +x`, not an install. The verdict above was verified from a clean
-`npm pack` + `npm install -g` of the built package; the exact run is in
-[`docs/validation/unrunnable-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/unrunnable-clean-install.md).
+`chmod +x`, not an install. Both the verdict and the repair were verified from
+a clean `npm pack` + `npm install -g` of the built package: the verdict run is
+in
+[`docs/validation/unrunnable-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/unrunnable-clean-install.md),
+and the repair run is in
+[`docs/validation/broken-repair-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/broken-repair-clean-install.md).
 
 ### Two installs, one winner (shadowing)
 
@@ -635,7 +692,9 @@ sentence embedded in a `MISS` row.
 - Read a script's shebang and report a command that is present but cannot start
   (for example its interpreter is missing) as `BROKEN` with the reason. It
   keeps `resolved: true` but sets `runnable: false` and exits `1`, and it does
-  not propose an install for a file that is already on disk.
+  not propose an install for a file that is already on disk. With `--fix` it
+  names the missing interpreter, or the owning npm global package when one is
+  provable, instead of reporting nothing to fix.
 - Inspect npm metadata for local and global installs: the global prefix,
   `node_modules/.bin`, `<prefix>/bin`, package `bin` entries, symlink targets,
   and executable bits. It reads package `bin` declarations even when the link
@@ -780,7 +839,8 @@ declared `bin` target is missing, a real `npm pack` + `npm install -g` whose
 bad-shebang command is reported `BROKEN` while a real command stays `ok`,
 shell-aware PATH fixes for zsh and bash, a packed-install `--fix` that appends a
 marked block to a temporary HOME, is idempotent on a second run, resolves in a
-fresh login shell, and disappears after the documented undo, a
+fresh login shell, and disappears after the documented undo, a packed-install
+broken-shebang repair that names the missing interpreter in text and `--json`, a
 found-but-off-PATH npm bin, the first login-only PATH directory, copy-paste
 fixes, offline `--json` output, shadowed copies in text and `--json`, suppression
 of PATH fixes for directories already searched, and user-level cargo, bun,
@@ -822,6 +882,20 @@ idempotent, starts a fresh login shell that resolves the command, removes the
 block, and checks that the login shell no longer resolves it. The captured run
 is in
 [`docs/validation/fix-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/fix-clean-install.md).
+
+To re-run the broken-shebang repair check from a packed install:
+
+```sh
+sh docs/probes/broken-repair-clean-install.sh
+```
+
+It packs the repository, installs the tarball into an isolated prefix, puts a
+`0755` script with a missing shebang interpreter on PATH, and runs the installed
+doctor with `--fix`. It asserts the text repair names the interpreter and the
+file, that `--json` has a non-empty `fixes` array with `fix.manual: true`, that
+neither mode says `nothing to fix`, and that no startup file was written. The
+captured run is in
+[`docs/validation/broken-repair-clean-install.md`](https://github.com/WJDdidi-1/cli-path-doctor/blob/main/docs/validation/broken-repair-clean-install.md).
 
 ## Status
 
