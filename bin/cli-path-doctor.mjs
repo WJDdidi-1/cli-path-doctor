@@ -4,7 +4,7 @@ import { buildContexts, firstLoginOnlyDirectory, resolveShell } from '../lib/con
 import { describeMiss, findCommandCopies, lookupCommand } from '../lib/path-resolver.mjs';
 import { inspectNpmBins, npmHint } from '../lib/npm-metadata.mjs';
 import { inspectToolchainBins, toolchainHint } from '../lib/toolchain-metadata.mjs';
-import { buildFixes, pathDirectoriesToAdd } from '../lib/fixes.mjs';
+import { buildFixes, manualRepairReason, pathDirectoriesToAdd } from '../lib/fixes.mjs';
 import { applyPathFix } from '../lib/apply-fix.mjs';
 import { rcFileForShell, shellName } from '../lib/shell-rc.mjs';
 
@@ -65,8 +65,10 @@ MVP features:
     copies. A fix never exports a directory that is already on the current PATH.
   - Read a script's shebang and report a file that is present but cannot start
     (missing or non-executable interpreter) as BROKEN, with runnable and
-    unrunnableReason in --json. A plain non-executable file keeps its MISS
-    reason and gets a chmod +x repair.
+    unrunnableReason in --json. A broken command is never reported as
+    "nothing to fix": --fix and --json name the missing interpreter and, for a
+    file inside the npm global prefix, the owning package to reinstall. A plain
+    non-executable file keeps its MISS reason and gets a chmod +x repair.
   - Support --json and run fully offline with no account or network call.
 `;
 
@@ -208,6 +210,8 @@ function runCommand(command, options) {
       resolved: Boolean(result.resolved),
       runnable: status === 'ok',
       unrunnableReason,
+      interpreter: result.interpreter || null,
+      envCommand: result.envCommand || null,
       path: result.resolved ? result.path : null,
       foundPath,
       nonExecutable,
@@ -250,14 +254,54 @@ function runCommand(command, options) {
     shell,
     rcFile,
   });
-  const fix = options.fix
-    ? applyPathFix({
-      directories: pathDirectories,
-      shell,
-      rcFile,
-      platform: process.platform,
-    })
-    : null;
+  const brokenRows = rows.filter((row) => row.status === 'broken');
+  let fix = null;
+  if (options.fix) {
+    if (pathDirectories.length > 0) {
+      fix = applyPathFix({
+        directories: pathDirectories,
+        shell,
+        rcFile,
+        platform: process.platform,
+      });
+
+      // The PATH change may be only part of the repair. A broken command still
+      // cannot start, so its cause belongs in the fix result even when a
+      // directory was appended.
+      if (!anyRunnable && brokenRows.length > 0) {
+        const repairReason = manualRepairReason({
+          command,
+          rows,
+          fixes,
+          runnable: false,
+        });
+        fix.reason = fix.reason ? `${fix.reason}; ${repairReason}` : repairReason;
+      }
+    } else if (!anyRunnable || fixes.length > 0) {
+      // Nothing to append to a startup file. The repairs are interpreter,
+      // permission, or package actions, so report them instead of refusing.
+      fix = {
+        applied: false,
+        file: null,
+        line: null,
+        alreadyPresent: false,
+        manual: true,
+        reason: manualRepairReason({
+          command,
+          rows,
+          fixes,
+          runnable: anyRunnable,
+        }),
+      };
+    } else {
+      fix = applyPathFix({
+        directories: [],
+        shell,
+        rcFile,
+        platform: process.platform,
+      });
+    }
+  }
 
   if (fix && !options.json) {
     if (fix.applied) {
@@ -266,6 +310,8 @@ function runCommand(command, options) {
       );
     } else if (fix.alreadyPresent) {
       process.stderr.write(`cli-path-doctor: ${fix.reason}\n`);
+    } else if (fix.manual) {
+      process.stderr.write(`cli-path-doctor: repair needed: ${fix.reason}\n`);
     } else {
       process.stderr.write(`cli-path-doctor: cannot apply PATH fix: ${fix.reason}\n`);
     }
@@ -279,6 +325,8 @@ function runCommand(command, options) {
       resolved: row.resolved,
       runnable: row.runnable,
       unrunnableReason: row.unrunnableReason,
+      interpreter: row.interpreter,
+      envCommand: row.envCommand,
       path: row.path,
       foundPath: row.foundPath,
       realPath: row.realPath,
