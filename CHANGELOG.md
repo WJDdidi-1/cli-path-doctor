@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Recorded the `--fix` baseline against the published `cli-path-doctor@0.6.0` in
+  `docs/validation/fix-0.6.0.md`: the doctor names the PATH directory and
+  `~/.zshrc` on stderr, but `--help` has no `--fix`, `--fix` is rejected as an
+  unknown option (exit `2`), the JSON only describes the fix, and the rc file's
+  SHA-256 is unchanged after diagnosis.
+
 ## [0.6.0] - 2026-11-10
 
 ### Added
